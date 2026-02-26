@@ -1,7 +1,7 @@
 {
   "id": "status-history",
   "name": "Status History",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "minAppVersion": "1.0.0",
   "description": "Automatically logs status changes with timestamps to status_history frontmatter.",
   "author": "Connrado",

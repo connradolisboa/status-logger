@@ -24,6 +24,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
+var currentYear = (/* @__PURE__ */ new Date()).getFullYear();
 var DEFAULT_SETTINGS = {
   includedFolders: [],
   includedTags: [],
@@ -32,7 +33,9 @@ var DEFAULT_SETTINGS = {
   chartDefaults: {
     folder: "",
     tags: "",
-    year: (/* @__PURE__ */ new Date()).getFullYear()
+    periodType: "month",
+    startDate: `${currentYear}-01-01`,
+    endDate: `${currentYear}-12-31`
   }
 };
 var StatusHistoryPlugin = class extends import_obsidian.Plugin {
@@ -63,11 +66,19 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
   }
   async load_() {
     const data = await this.loadData();
+    if (data?.settings) {
+      this.settings = {
+        ...DEFAULT_SETTINGS,
+        ...data.settings,
+        // Deep-merge chartDefaults so new fields always get a default value
+        chartDefaults: {
+          ...DEFAULT_SETTINGS.chartDefaults,
+          ...data.settings.chartDefaults ?? {}
+        }
+      };
+    }
     if (data?.previousStatuses) {
       this.previousStatuses = new Map(Object.entries(data.previousStatuses));
-    }
-    if (data?.settings) {
-      this.settings = { ...DEFAULT_SETTINGS, ...data.settings };
     }
   }
   async save() {
@@ -141,7 +152,7 @@ function buildPagesQuery(folder, tags) {
   tags.forEach((t) => parts.push(`#${t}`));
   return parts.join(" and ");
 }
-function generateChartCode(pagesQuery, year) {
+function generateChartCode(pagesQuery, periodType, startDate, endDate) {
   const pagesArg = pagesQuery ? JSON.stringify(pagesQuery) : '""';
   return `const todoistColors = {
   "berry_red":   "#b8256f",
@@ -180,8 +191,59 @@ const pointShapeMap = {
   "Cancelled": "cross"
 };
 
-const year = ${year};
-const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const periodType = ${JSON.stringify(periodType)};
+const start = new Date(${JSON.stringify(startDate)});
+const end = new Date(${JSON.stringify(endDate)});
+
+// Build periods array: { label, periodEnd }
+const periods = [];
+if (periodType === "month") {
+  let cur = new Date(start.getFullYear(), start.getMonth(), 1);
+  const stop = new Date(end.getFullYear(), end.getMonth(), 1);
+  while (cur <= stop) {
+    const label = cur.toLocaleString("en-US", { month: "short", year: "numeric" });
+    const periodEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+    periods.push({ label, periodEnd });
+    cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+  }
+} else if (periodType === "quarter") {
+  let cur = new Date(start.getFullYear(), Math.floor(start.getMonth() / 3) * 3, 1);
+  while (cur <= end) {
+    const q = Math.floor(cur.getMonth() / 3) + 1;
+    const label = \`Q\${q} \${cur.getFullYear()}\`;
+    const periodEnd = new Date(cur.getFullYear(), cur.getMonth() + 3, 0);
+    periods.push({ label, periodEnd });
+    cur = new Date(cur.getFullYear(), cur.getMonth() + 3, 1);
+  }
+} else if (periodType === "year") {
+  let cur = new Date(start.getFullYear(), 0, 1);
+  while (cur.getFullYear() <= end.getFullYear()) {
+    const label = String(cur.getFullYear());
+    const periodEnd = new Date(cur.getFullYear(), 11, 31);
+    periods.push({ label, periodEnd });
+    cur = new Date(cur.getFullYear() + 1, 0, 1);
+  }
+} else if (periodType === "week") {
+  // Align to the Monday of the week containing startDate
+  let cur = new Date(start);
+  const day = cur.getDay();
+  cur.setDate(cur.getDate() - (day === 0 ? 6 : day - 1));
+  while (cur <= end) {
+    const weekEnd = new Date(cur);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    // ISO week number
+    const d = new Date(Date.UTC(cur.getFullYear(), cur.getMonth(), cur.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const weekNum = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+    const label = \`\${d.getUTCFullYear()}-W\${String(weekNum).padStart(2, "0")}\`;
+    periods.push({ label, periodEnd: weekEnd });
+    cur.setDate(cur.getDate() + 7);
+  }
+}
+
+const labels = periods.map(p => p.label);
 
 const pages = dv.pages(${pagesArg});
 const datasets = [];
@@ -202,10 +264,8 @@ for (let page of pages) {
   const pointStyles = [];
   const pointRadii = [];
 
-  months.forEach((_, monthIndex) => {
-    const monthEnd = new Date(year, monthIndex + 1, 0);
-
-    if (createdDate && monthEnd < createdDate) {
+  periods.forEach(({ periodEnd }) => {
+    if (createdDate && periodEnd < createdDate) {
       data.push(null);
       pointStyles.push("circle");
       pointRadii.push(0);
@@ -214,7 +274,7 @@ for (let page of pages) {
 
     let currentStatus = null;
     for (let entry of sorted) {
-      if (entry.date <= monthEnd) {
+      if (entry.date <= periodEnd) {
         currentStatus = entry.status;
       } else {
         break;
@@ -242,7 +302,7 @@ for (let page of pages) {
 
 const chartData = {
   type: "line",
-  data: { labels: months, datasets: datasets },
+  data: { labels: labels, datasets: datasets },
   options: {
     responsive: true,
     scales: {
@@ -260,8 +320,8 @@ const chartData = {
       tooltip: {
         callbacks: {
           label: ctx => {
-            const labels = ["","Inactive/New/Cancelled","Backlog","Ongoing","Active","Done"];
-            return \`\${ctx.dataset.label}: \${labels[ctx.raw] ?? "Unknown"}\`;
+            const statusLabels = ["","Inactive/New/Cancelled","Backlog","Ongoing","Active","Done"];
+            return \`\${ctx.dataset.label}: \${statusLabels[ctx.raw] ?? "Unknown"}\`;
           }
         }
       }
@@ -277,7 +337,9 @@ var InsertChartModal = class extends import_obsidian.Modal {
     this.plugin = plugin;
     this.folder = plugin.settings.chartDefaults.folder;
     this.tags = plugin.settings.chartDefaults.tags;
-    this.year = plugin.settings.chartDefaults.year;
+    this.periodType = plugin.settings.chartDefaults.periodType;
+    this.startDate = plugin.settings.chartDefaults.startDate;
+    this.endDate = plugin.settings.chartDefaults.endDate;
   }
   onOpen() {
     const { contentEl } = this;
@@ -288,8 +350,14 @@ var InsertChartModal = class extends import_obsidian.Modal {
     new import_obsidian.Setting(contentEl).setName("Tags").setDesc("Filter pages by tags, comma-separated without # (e.g. area, project). Leave empty for all tags.").addText(
       (text) => text.setValue(this.tags).onChange((val) => this.tags = val)
     );
-    new import_obsidian.Setting(contentEl).setName("Year").setDesc("The year to display in the chart.").addText(
-      (text) => text.setValue(String(this.year)).onChange((val) => this.year = parseInt(val) || (/* @__PURE__ */ new Date()).getFullYear())
+    new import_obsidian.Setting(contentEl).setName("Period").setDesc("The time interval for each data point on the X axis.").addDropdown(
+      (dropdown) => dropdown.addOption("week", "Week").addOption("month", "Month").addOption("quarter", "Quarter").addOption("year", "Year").setValue(this.periodType).onChange((val) => this.periodType = val)
+    );
+    new import_obsidian.Setting(contentEl).setName("Start date").setDesc("Start of the date range (YYYY-MM-DD).").addText(
+      (text) => text.setValue(this.startDate).onChange((val) => this.startDate = val)
+    );
+    new import_obsidian.Setting(contentEl).setName("End date").setDesc("End of the date range (YYYY-MM-DD).").addText(
+      (text) => text.setValue(this.endDate).onChange((val) => this.endDate = val)
     );
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Insert").setCta().onClick(async () => {
@@ -307,14 +375,16 @@ var InsertChartModal = class extends import_obsidian.Modal {
     this.plugin.settings.chartDefaults = {
       folder: this.folder,
       tags: this.tags,
-      year: this.year
+      periodType: this.periodType,
+      startDate: this.startDate,
+      endDate: this.endDate
     };
     await this.plugin.save();
     const editor = this.app.workspace.activeEditor?.editor;
     if (!editor) return;
     const tags = this.tags.split(",").map((t) => t.trim()).filter((t) => t);
     const pagesQuery = buildPagesQuery(this.folder.trim(), tags);
-    const chartCode = generateChartCode(pagesQuery, this.year);
+    const chartCode = generateChartCode(pagesQuery, this.periodType, this.startDate, this.endDate);
     editor.replaceRange("```dataviewjs\n" + chartCode + "\n```", editor.getCursor());
   }
 };
@@ -403,13 +473,22 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.save();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default year").setDesc("Year to display in the chart.").addText(
-      (text) => text.setPlaceholder(String((/* @__PURE__ */ new Date()).getFullYear())).setValue(String(this.plugin.settings.chartDefaults.year)).onChange(async (val) => {
-        const year = parseInt(val);
-        if (year) {
-          this.plugin.settings.chartDefaults.year = year;
-          await this.plugin.save();
-        }
+    new import_obsidian.Setting(containerEl).setName("Default period").setDesc("The time interval for each data point.").addDropdown(
+      (dropdown) => dropdown.addOption("week", "Week").addOption("month", "Month").addOption("quarter", "Quarter").addOption("year", "Year").setValue(this.plugin.settings.chartDefaults.periodType).onChange(async (val) => {
+        this.plugin.settings.chartDefaults.periodType = val;
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default start date").setDesc("Start of the date range (YYYY-MM-DD).").addText(
+      (text) => text.setPlaceholder(`${currentYear}-01-01`).setValue(this.plugin.settings.chartDefaults.startDate).onChange(async (val) => {
+        this.plugin.settings.chartDefaults.startDate = val;
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default end date").setDesc("End of the date range (YYYY-MM-DD).").addText(
+      (text) => text.setPlaceholder(`${currentYear}-12-31`).setValue(this.plugin.settings.chartDefaults.endDate).onChange(async (val) => {
+        this.plugin.settings.chartDefaults.endDate = val;
+        await this.plugin.save();
       })
     );
   }
