@@ -28,7 +28,12 @@ var DEFAULT_SETTINGS = {
   includedFolders: [],
   includedTags: [],
   excludedFolders: [],
-  excludedTags: []
+  excludedTags: [],
+  chartDefaults: {
+    folder: "",
+    tags: "",
+    year: (/* @__PURE__ */ new Date()).getFullYear()
+  }
 };
 var StatusHistoryPlugin = class extends import_obsidian.Plugin {
   constructor() {
@@ -40,6 +45,13 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
     console.log("Status History Plugin loaded");
     await this.load_();
     this.addSettingTab(new StatusHistorySettingTab(this.app, this));
+    this.addCommand({
+      id: "insert-status-chart",
+      name: "Insert status chart",
+      editorCallback: () => {
+        new InsertChartModal(this.app, this).open();
+      }
+    });
     this.app.workspace.onLayoutReady(() => {
       this.loadAllStatuses();
     });
@@ -123,6 +135,189 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
     console.log("Status History Plugin unloaded");
   }
 };
+function buildPagesQuery(folder, tags) {
+  const parts = [];
+  if (folder) parts.push(`"${folder}"`);
+  tags.forEach((t) => parts.push(`#${t}`));
+  return parts.join(" and ");
+}
+function generateChartCode(pagesQuery, year) {
+  const pagesArg = pagesQuery ? JSON.stringify(pagesQuery) : '""';
+  return `const todoistColors = {
+  "berry_red":   "#b8256f",
+  "red":         "#db4035",
+  "orange":      "#ff9933",
+  "yellow":      "#fad000",
+  "olive_green": "#afb83b",
+  "lime_green":  "#7ecc49",
+  "green":       "#299438",
+  "mint_green":  "#6accbc",
+  "teal":        "#158fad",
+  "sky_blue":    "#14aaf5",
+  "light_blue":  "#96c3eb",
+  "blue":        "#4073ff",
+  "grape":       "#884dff",
+  "violet":      "#af38eb",
+  "lavender":    "#eb96eb",
+  "magenta":     "#e05194",
+  "salmon":      "#ff8d85",
+  "charcoal":    "#808080",
+  "grey":        "#b8b8b8",
+  "taupe":       "#ccac93"
+};
+
+const statusMap = {
+  "Inactive": 1, "New": 1, "Cancelled": 1,
+  "Backlog": 2,
+  "Ongoing": 3,
+  "Active": 4,
+  "Done": 5
+};
+
+const pointShapeMap = {
+  "Inactive": "circle",
+  "New": "triangle",
+  "Cancelled": "cross"
+};
+
+const year = ${year};
+const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+const pages = dv.pages(${pagesArg});
+const datasets = [];
+
+for (let page of pages) {
+  const history = page.status_history;
+  const createdDate = page.date ? new Date(page.date) : null;
+  const rawColor = page.color ?? "charcoal";
+  const color = todoistColors[rawColor] ?? rawColor;
+
+  const sorted = (history && Array.isArray(history))
+    ? history
+        .map(e => ({ date: new Date(e.dateSet), status: e.statusSet }))
+        .sort((a, b) => a.date - b.date)
+    : [];
+
+  const data = [];
+  const pointStyles = [];
+  const pointRadii = [];
+
+  months.forEach((_, monthIndex) => {
+    const monthEnd = new Date(year, monthIndex + 1, 0);
+
+    if (createdDate && monthEnd < createdDate) {
+      data.push(null);
+      pointStyles.push("circle");
+      pointRadii.push(0);
+      return;
+    }
+
+    let currentStatus = null;
+    for (let entry of sorted) {
+      if (entry.date <= monthEnd) {
+        currentStatus = entry.status;
+      } else {
+        break;
+      }
+    }
+
+    if (currentStatus === null) currentStatus = "Inactive";
+
+    data.push(statusMap[currentStatus] ?? null);
+    pointStyles.push(pointShapeMap[currentStatus] ?? "circle");
+    pointRadii.push(5);
+  });
+
+  datasets.push({
+    label: page.file.name,
+    data: data,
+    borderColor: color,
+    backgroundColor: color + "33",
+    pointStyle: pointStyles,
+    pointRadius: pointRadii,
+    tension: 0.3,
+    spanGaps: true,
+  });
+}
+
+const chartData = {
+  type: "line",
+  data: { labels: months, datasets: datasets },
+  options: {
+    responsive: true,
+    scales: {
+      y: {
+        min: 1,
+        max: 5,
+        ticks: {
+          stepSize: 1,
+          callback: val => ["","Inactive/New/Cancelled","Backlog","Ongoing","Active","Done"][val] ?? ""
+        }
+      }
+    },
+    plugins: {
+      legend: { position: "bottom" },
+      tooltip: {
+        callbacks: {
+          label: ctx => {
+            const labels = ["","Inactive/New/Cancelled","Backlog","Ongoing","Active","Done"];
+            return \`\${ctx.dataset.label}: \${labels[ctx.raw] ?? "Unknown"}\`;
+          }
+        }
+      }
+    }
+  }
+};
+
+window.renderChart(chartData, this.container);`;
+}
+var InsertChartModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+    this.folder = plugin.settings.chartDefaults.folder;
+    this.tags = plugin.settings.chartDefaults.tags;
+    this.year = plugin.settings.chartDefaults.year;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Insert Status Chart" });
+    new import_obsidian.Setting(contentEl).setName("Folder").setDesc("Filter pages by folder path (e.g. Management). Leave empty for all folders.").addText(
+      (text) => text.setValue(this.folder).onChange((val) => this.folder = val)
+    );
+    new import_obsidian.Setting(contentEl).setName("Tags").setDesc("Filter pages by tags, comma-separated without # (e.g. area, project). Leave empty for all tags.").addText(
+      (text) => text.setValue(this.tags).onChange((val) => this.tags = val)
+    );
+    new import_obsidian.Setting(contentEl).setName("Year").setDesc("The year to display in the chart.").addText(
+      (text) => text.setValue(String(this.year)).onChange((val) => this.year = parseInt(val) || (/* @__PURE__ */ new Date()).getFullYear())
+    );
+    new import_obsidian.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText("Insert").setCta().onClick(async () => {
+        await this.insertChart();
+        this.close();
+      })
+    ).addButton(
+      (btn) => btn.setButtonText("Cancel").onClick(() => this.close())
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+  async insertChart() {
+    this.plugin.settings.chartDefaults = {
+      folder: this.folder,
+      tags: this.tags,
+      year: this.year
+    };
+    await this.plugin.save();
+    const editor = this.app.workspace.activeEditor?.editor;
+    if (!editor) return;
+    const tags = this.tags.split(",").map((t) => t.trim()).filter((t) => t);
+    const pagesQuery = buildPagesQuery(this.folder.trim(), tags);
+    const chartCode = generateChartCode(pagesQuery, this.year);
+    editor.replaceRange("```dataviewjs\n" + chartCode + "\n```", editor.getCursor());
+  }
+};
 var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
@@ -190,6 +385,32 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
         this.plugin.settings.excludedTags = this.plugin.settings.excludedTags.filter((t) => t !== val);
         await this.plugin.save();
       }
+    );
+    containerEl.createEl("h3", { text: "Chart Defaults" });
+    containerEl.createEl("p", {
+      text: "Default values pre-filled when using the 'Insert status chart' command. Updated automatically when you insert a chart.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(containerEl).setName("Default folder").setDesc("Folder path to filter pages by (e.g. Management).").addText(
+      (text) => text.setPlaceholder("e.g. Management").setValue(this.plugin.settings.chartDefaults.folder).onChange(async (val) => {
+        this.plugin.settings.chartDefaults.folder = val;
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default tags").setDesc("Tags to filter pages by, comma-separated without # (e.g. area, project).").addText(
+      (text) => text.setPlaceholder("e.g. area, project").setValue(this.plugin.settings.chartDefaults.tags).onChange(async (val) => {
+        this.plugin.settings.chartDefaults.tags = val;
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default year").setDesc("Year to display in the chart.").addText(
+      (text) => text.setPlaceholder(String((/* @__PURE__ */ new Date()).getFullYear())).setValue(String(this.plugin.settings.chartDefaults.year)).onChange(async (val) => {
+        const year = parseInt(val);
+        if (year) {
+          this.plugin.settings.chartDefaults.year = year;
+          await this.plugin.save();
+        }
+      })
     );
   }
   renderListSection(containerEl, heading, description, placeholder, getItems, onAdd, onRemove) {
