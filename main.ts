@@ -162,7 +162,8 @@ export default class StatusHistoryPlugin extends Plugin {
   }
 
   async appendStatusHistory(file: TFile, newStatus: string) {
-    const today = new Date().toISOString().split("T")[0];
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const newEntry: StatusEntry = { dateSet: today, statusSet: newStatus };
 
     await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
@@ -235,8 +236,8 @@ const pointShapeMap = {
 };
 
 const periodType = ${JSON.stringify(periodType)};
-const start = new Date(${JSON.stringify(startDate)});
-const end = new Date(${JSON.stringify(endDate)});
+const start = new Date(${JSON.stringify(startDate)} + "T00:00:00");
+const end = new Date(${JSON.stringify(endDate)} + "T00:00:00");
 
 // Build periods array: { label, periodEnd }
 const periods = [];
@@ -299,7 +300,7 @@ for (let page of pages) {
 
   const sorted = (history && Array.isArray(history))
     ? history
-        .map(e => ({ date: new Date(e.dateSet), status: e.statusSet }))
+        .map(e => ({ date: new Date(e.dateSet + "T00:00:00"), status: e.statusSet }))
         .sort((a, b) => a.date - b.date)
     : [];
 
