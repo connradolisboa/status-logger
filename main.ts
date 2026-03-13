@@ -13,6 +13,7 @@ interface PluginSettings {
   excludedFolders: string[];
   excludedTags: string[];
   overwriteSameDay: boolean;
+  skipDuplicateStatus: boolean;
   chartDefaults: {
     folder: string;
     tags: string;
@@ -35,6 +36,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
   excludedFolders: [],
   excludedTags: [],
   overwriteSameDay: false,
+  skipDuplicateStatus: false,
   chartDefaults: {
     folder: "",
     tags: "",
@@ -172,6 +174,9 @@ export default class StatusHistoryPlugin extends Plugin {
       const history: StatusEntry[] = Array.isArray(frontmatter.status_history)
         ? frontmatter.status_history
         : [];
+      if (this.settings.skipDuplicateStatus && history.length > 0 && history[history.length - 1].statusSet === newStatus) {
+        return;
+      }
       if (this.settings.overwriteSameDay && history.length > 0 && history[history.length - 1].dateSet === today) {
         history[history.length - 1] = newEntry;
       } else {
@@ -574,6 +579,16 @@ class StatusHistorySettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.overwriteSameDay).onChange(async (value) => {
           this.plugin.settings.overwriteSameDay = value;
+          await this.plugin.save();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Skip duplicate status")
+      .setDesc("When enabled, a status change is not logged if it is the same as the most recent entry in the history.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.skipDuplicateStatus).onChange(async (value) => {
+          this.plugin.settings.skipDuplicateStatus = value;
           await this.plugin.save();
         })
       );

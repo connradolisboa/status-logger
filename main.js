@@ -31,6 +31,7 @@ var DEFAULT_SETTINGS = {
   excludedFolders: [],
   excludedTags: [],
   overwriteSameDay: false,
+  skipDuplicateStatus: false,
   chartDefaults: {
     folder: "",
     tags: "",
@@ -139,6 +140,9 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
     const newEntry = { dateSet: today, statusSet: newStatus };
     await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
       const history = Array.isArray(frontmatter.status_history) ? frontmatter.status_history : [];
+      if (this.settings.skipDuplicateStatus && history.length > 0 && history[history.length - 1].statusSet === newStatus) {
+        return;
+      }
       if (this.settings.overwriteSameDay && history.length > 0 && history[history.length - 1].dateSet === today) {
         history[history.length - 1] = newEntry;
       } else {
@@ -465,6 +469,12 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(containerEl).setName("Overwrite same-day entries").setDesc("When enabled, only the latest status change per day is kept instead of logging every change.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.overwriteSameDay).onChange(async (value) => {
         this.plugin.settings.overwriteSameDay = value;
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Skip duplicate status").setDesc("When enabled, a status change is not logged if it is the same as the most recent entry in the history.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.skipDuplicateStatus).onChange(async (value) => {
+        this.plugin.settings.skipDuplicateStatus = value;
         await this.plugin.save();
       })
     );
