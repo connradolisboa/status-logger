@@ -12,6 +12,7 @@ interface PluginSettings {
   includedTags: string[];
   excludedFolders: string[];
   excludedTags: string[];
+  overwriteSameDay: boolean;
   chartDefaults: {
     folder: string;
     tags: string;
@@ -33,6 +34,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
   includedTags: [],
   excludedFolders: [],
   excludedTags: [],
+  overwriteSameDay: false,
   chartDefaults: {
     folder: "",
     tags: "",
@@ -170,7 +172,11 @@ export default class StatusHistoryPlugin extends Plugin {
       const history: StatusEntry[] = Array.isArray(frontmatter.status_history)
         ? frontmatter.status_history
         : [];
-      history.push(newEntry);
+      if (this.settings.overwriteSameDay && history.length > 0 && history[history.length - 1].dateSet === today) {
+        history[history.length - 1] = newEntry;
+      } else {
+        history.push(newEntry);
+      }
       frontmatter.status_history = history;
     });
 
@@ -561,6 +567,16 @@ class StatusHistorySettingTab extends PluginSettingTab {
         await this.plugin.save();
       }
     );
+
+    new Setting(containerEl)
+      .setName("Overwrite same-day entries")
+      .setDesc("When enabled, only the latest status change per day is kept instead of logging every change.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.overwriteSameDay).onChange(async (value) => {
+          this.plugin.settings.overwriteSameDay = value;
+          await this.plugin.save();
+        })
+      );
 
     containerEl.createEl("h3", { text: "Chart Defaults" });
     containerEl.createEl("p", {

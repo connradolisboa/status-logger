@@ -30,6 +30,7 @@ var DEFAULT_SETTINGS = {
   includedTags: [],
   excludedFolders: [],
   excludedTags: [],
+  overwriteSameDay: false,
   chartDefaults: {
     folder: "",
     tags: "",
@@ -133,11 +134,16 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
     await this.appendStatusHistory(file, newStatus);
   }
   async appendStatusHistory(file, newStatus) {
-    const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+    const now = /* @__PURE__ */ new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const newEntry = { dateSet: today, statusSet: newStatus };
     await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
       const history = Array.isArray(frontmatter.status_history) ? frontmatter.status_history : [];
-      history.push(newEntry);
+      if (this.settings.overwriteSameDay && history.length > 0 && history[history.length - 1].dateSet === today) {
+        history[history.length - 1] = newEntry;
+      } else {
+        history.push(newEntry);
+      }
       frontmatter.status_history = history;
     });
     console.log(`Status History: logged "${newStatus}" for ${file.name}`);
@@ -192,8 +198,8 @@ const pointShapeMap = {
 };
 
 const periodType = ${JSON.stringify(periodType)};
-const start = new Date(${JSON.stringify(startDate)});
-const end = new Date(${JSON.stringify(endDate)});
+const start = new Date(${JSON.stringify(startDate)} + "T00:00:00");
+const end = new Date(${JSON.stringify(endDate)} + "T00:00:00");
 
 // Build periods array: { label, periodEnd }
 const periods = [];
@@ -256,7 +262,7 @@ for (let page of pages) {
 
   const sorted = (history && Array.isArray(history))
     ? history
-        .map(e => ({ date: new Date(e.dateSet), status: e.statusSet }))
+        .map(e => ({ date: new Date(e.dateSet + "T00:00:00"), status: e.statusSet }))
         .sort((a, b) => a.date - b.date)
     : [];
 
@@ -455,6 +461,12 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
         this.plugin.settings.excludedTags = this.plugin.settings.excludedTags.filter((t) => t !== val);
         await this.plugin.save();
       }
+    );
+    new import_obsidian.Setting(containerEl).setName("Overwrite same-day entries").setDesc("When enabled, only the latest status change per day is kept instead of logging every change.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.overwriteSameDay).onChange(async (value) => {
+        this.plugin.settings.overwriteSameDay = value;
+        await this.plugin.save();
+      })
     );
     containerEl.createEl("h3", { text: "Chart Defaults" });
     containerEl.createEl("p", {
