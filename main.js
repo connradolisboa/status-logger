@@ -183,6 +183,20 @@ var PropertyLogsPlugin = class extends import_obsidian.Plugin {
     if (!shouldLogStatus && Object.keys(changedProps).length === 0) return;
     await this.appendStatusHistory(file, shouldLogStatus ? newStatus : void 0, changedProps);
   }
+  normalizeEntry(entry) {
+    const { dateKey, statusKey, additionalProperties } = this.settings;
+    const ordered = {};
+    if (entry[dateKey] !== void 0) ordered[dateKey] = entry[dateKey];
+    if (entry["comment"] !== void 0) ordered["comment"] = entry["comment"];
+    if (entry[statusKey] !== void 0) ordered[statusKey] = entry[statusKey];
+    for (const { historyKey } of additionalProperties) {
+      if (entry[historyKey] !== void 0) ordered[historyKey] = entry[historyKey];
+    }
+    for (const [k, v] of Object.entries(entry)) {
+      if (!(k in ordered)) ordered[k] = v;
+    }
+    return ordered;
+  }
   async appendStatusHistory(file, newStatus, changedProps = {}) {
     const now = /* @__PURE__ */ new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -197,11 +211,10 @@ var PropertyLogsPlugin = class extends import_obsidian.Plugin {
       }
       const lastEntry = history.length > 0 ? history[history.length - 1] : null;
       const isSameDay = lastEntry?.[dateKey] === today;
-      const shouldMerge = isSameDay && (this.settings.overwriteSameDay || newStatus === void 0);
-      if (shouldMerge) {
-        Object.assign(history[history.length - 1], newEntry);
+      if (isSameDay) {
+        history[history.length - 1] = this.normalizeEntry(Object.assign({}, lastEntry, newEntry));
       } else {
-        history.push(newEntry);
+        history.push(this.normalizeEntry(newEntry));
       }
       frontmatter[historyKey] = history;
     });
@@ -493,9 +506,9 @@ var AddCommentModal = class extends import_obsidian.Modal {
       const history = Array.isArray(frontmatter[historyKey]) ? frontmatter[historyKey] : [];
       const lastEntry = history.length > 0 ? history[history.length - 1] : null;
       if (lastEntry && lastEntry[dateKey] === today) {
-        lastEntry["comment"] = comment;
+        history[history.length - 1] = this.plugin.normalizeEntry({ ...lastEntry, comment });
       } else {
-        history.push({ [dateKey]: today, comment });
+        history.push(this.plugin.normalizeEntry({ [dateKey]: today, comment }));
       }
       frontmatter[historyKey] = history;
     });
@@ -638,10 +651,24 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
     const propListEl = behaviorPane.createDiv();
     const renderPropList = () => {
       propListEl.empty();
-      for (const item of this.plugin.settings.additionalProperties) {
+      const props = this.plugin.settings.additionalProperties;
+      for (let i = 0; i < props.length; i++) {
+        const item = props[i];
         new import_obsidian.Setting(propListEl).setName(`${item.frontmatterKey} \u2192 ${item.historyKey}`).addButton(
+          (btn) => btn.setIcon("arrow-up").setTooltip("Move up").setDisabled(i === 0).onClick(async () => {
+            [props[i - 1], props[i]] = [props[i], props[i - 1]];
+            await this.plugin.save();
+            renderPropList();
+          })
+        ).addButton(
+          (btn) => btn.setIcon("arrow-down").setTooltip("Move down").setDisabled(i === props.length - 1).onClick(async () => {
+            [props[i], props[i + 1]] = [props[i + 1], props[i]];
+            await this.plugin.save();
+            renderPropList();
+          })
+        ).addButton(
           (btn) => btn.setIcon("trash").setTooltip("Remove").onClick(async () => {
-            this.plugin.settings.additionalProperties = this.plugin.settings.additionalProperties.filter(
+            this.plugin.settings.additionalProperties = props.filter(
               (p) => p.frontmatterKey !== item.frontmatterKey || p.historyKey !== item.historyKey
             );
             await this.plugin.save();

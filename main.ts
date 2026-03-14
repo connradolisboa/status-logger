@@ -222,6 +222,21 @@ export default class PropertyLogsPlugin extends Plugin {
     await this.appendStatusHistory(file, shouldLogStatus ? newStatus! : undefined, changedProps);
   }
 
+  normalizeEntry(entry: StatusEntry): StatusEntry {
+    const { dateKey, statusKey, additionalProperties } = this.settings;
+    const ordered: StatusEntry = {};
+    if (entry[dateKey] !== undefined) ordered[dateKey] = entry[dateKey];
+    if (entry["comment"] !== undefined) ordered["comment"] = entry["comment"];
+    if (entry[statusKey] !== undefined) ordered[statusKey] = entry[statusKey];
+    for (const { historyKey } of additionalProperties) {
+      if (entry[historyKey] !== undefined) ordered[historyKey] = entry[historyKey];
+    }
+    for (const [k, v] of Object.entries(entry)) {
+      if (!(k in ordered)) ordered[k] = v;
+    }
+    return ordered;
+  }
+
   async appendStatusHistory(file: TFile, newStatus?: string, changedProps: Record<string, string> = {}) {
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -240,13 +255,10 @@ export default class PropertyLogsPlugin extends Plugin {
       }
       const lastEntry = history.length > 0 ? history[history.length - 1] : null;
       const isSameDay = lastEntry?.[dateKey] === today;
-      // Always merge into same-day entry for additional property changes;
-      // for status changes, only merge when overwriteSameDay is enabled.
-      const shouldMerge = isSameDay && (this.settings.overwriteSameDay || newStatus === undefined);
-      if (shouldMerge) {
-        Object.assign(history[history.length - 1], newEntry);
+      if (isSameDay) {
+        history[history.length - 1] = this.normalizeEntry(Object.assign({}, lastEntry, newEntry));
       } else {
-        history.push(newEntry);
+        history.push(this.normalizeEntry(newEntry));
       }
       frontmatter[historyKey] = history;
     });
@@ -620,9 +632,9 @@ class AddCommentModal extends Modal {
         : [];
       const lastEntry = history.length > 0 ? history[history.length - 1] : null;
       if (lastEntry && lastEntry[dateKey] === today) {
-        lastEntry["comment"] = comment;
+        history[history.length - 1] = this.plugin.normalizeEntry({ ...lastEntry, comment });
       } else {
-        history.push({ [dateKey]: today, comment });
+        history.push(this.plugin.normalizeEntry({ [dateKey]: today, comment }));
       }
       frontmatter[historyKey] = history;
     });
@@ -816,15 +828,39 @@ class StatusHistorySettingTab extends PluginSettingTab {
     const propListEl = behaviorPane.createDiv();
     const renderPropList = () => {
       propListEl.empty();
-      for (const item of this.plugin.settings.additionalProperties) {
+      const props = this.plugin.settings.additionalProperties;
+      for (let i = 0; i < props.length; i++) {
+        const item = props[i];
         new Setting(propListEl)
           .setName(`${item.frontmatterKey} → ${item.historyKey}`)
+          .addButton((btn) =>
+            btn
+              .setIcon("arrow-up")
+              .setTooltip("Move up")
+              .setDisabled(i === 0)
+              .onClick(async () => {
+                [props[i - 1], props[i]] = [props[i], props[i - 1]];
+                await this.plugin.save();
+                renderPropList();
+              })
+          )
+          .addButton((btn) =>
+            btn
+              .setIcon("arrow-down")
+              .setTooltip("Move down")
+              .setDisabled(i === props.length - 1)
+              .onClick(async () => {
+                [props[i], props[i + 1]] = [props[i + 1], props[i]];
+                await this.plugin.save();
+                renderPropList();
+              })
+          )
           .addButton((btn) =>
             btn
               .setIcon("trash")
               .setTooltip("Remove")
               .onClick(async () => {
-                this.plugin.settings.additionalProperties = this.plugin.settings.additionalProperties.filter(
+                this.plugin.settings.additionalProperties = props.filter(
                   (p) => p.frontmatterKey !== item.frontmatterKey || p.historyKey !== item.historyKey
                 );
                 await this.plugin.save();
