@@ -406,8 +406,31 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
+    containerEl.addClass("status-history-settings");
+    const tabs = [
+      { id: "filters", label: "Filters" },
+      { id: "behavior", label: "Behavior" },
+      { id: "chart", label: "Chart Defaults" }
+    ];
+    const navEl = containerEl.createDiv({ cls: "status-history-tabs-nav" });
+    const contentEl = containerEl.createDiv({ cls: "status-history-tabs-content" });
+    const showTab = (activeId) => {
+      navEl.querySelectorAll(".status-history-tab-btn").forEach((btn) => {
+        btn.toggleClass("is-active", btn.getAttribute("data-tab") === activeId);
+      });
+      contentEl.querySelectorAll(".status-history-tab-pane").forEach((pane) => {
+        pane.toggle(pane.getAttribute("data-tab") === activeId);
+      });
+    };
+    for (const tab of tabs) {
+      const btn = navEl.createEl("button", { text: tab.label, cls: "status-history-tab-btn" });
+      btn.setAttribute("data-tab", tab.id);
+      btn.addEventListener("click", () => showTab(tab.id));
+    }
+    const filtersPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
+    filtersPane.setAttribute("data-tab", "filters");
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Included Folders",
       "Log status changes only for files in these folders. Leave empty to include all files (unless excluded).",
       "e.g. Projects/Active",
@@ -422,7 +445,7 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
       }
     );
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Included Tags",
       "Log status changes only for files with these tags. Leave empty to include all files (unless excluded).",
       "e.g. tracked",
@@ -437,7 +460,7 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
       }
     );
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Excluded Folders",
       "Never log status changes for files in these folders. Exclusions take priority over inclusions.",
       "e.g. Archive",
@@ -452,7 +475,7 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
       }
     );
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Excluded Tags",
       "Never log status changes for files with these tags. Exclusions take priority over inclusions.",
       "e.g. no-log",
@@ -466,53 +489,57 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.save();
       }
     );
-    new import_obsidian.Setting(containerEl).setName("Overwrite same-day entries").setDesc("When enabled, only the latest status change per day is kept instead of logging every change.").addToggle(
+    const behaviorPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
+    behaviorPane.setAttribute("data-tab", "behavior");
+    new import_obsidian.Setting(behaviorPane).setName("Overwrite same-day entries").setDesc("When enabled, only the latest status change per day is kept instead of logging every change.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.overwriteSameDay).onChange(async (value) => {
         this.plugin.settings.overwriteSameDay = value;
         await this.plugin.save();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Skip duplicate status").setDesc("When enabled, a status change is not logged if it is the same as the most recent entry in the history.").addToggle(
+    new import_obsidian.Setting(behaviorPane).setName("Skip duplicate status").setDesc("When enabled, a status change is not logged if it is the same as the most recent entry in the history.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.skipDuplicateStatus).onChange(async (value) => {
         this.plugin.settings.skipDuplicateStatus = value;
         await this.plugin.save();
       })
     );
-    containerEl.createEl("h3", { text: "Chart Defaults" });
-    containerEl.createEl("p", {
+    const chartPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
+    chartPane.setAttribute("data-tab", "chart");
+    chartPane.createEl("p", {
       text: "Default values pre-filled when using the 'Insert status chart' command. Updated automatically when you insert a chart.",
       cls: "setting-item-description"
     });
-    new import_obsidian.Setting(containerEl).setName("Default folder").setDesc("Folder path to filter pages by (e.g. Management).").addText(
+    new import_obsidian.Setting(chartPane).setName("Default folder").setDesc("Folder path to filter pages by (e.g. Management).").addText(
       (text) => text.setPlaceholder("e.g. Management").setValue(this.plugin.settings.chartDefaults.folder).onChange(async (val) => {
         this.plugin.settings.chartDefaults.folder = val;
         await this.plugin.save();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default tags").setDesc("Tags to filter pages by, comma-separated without # (e.g. area, project).").addText(
+    new import_obsidian.Setting(chartPane).setName("Default tags").setDesc("Tags to filter pages by, comma-separated without # (e.g. area, project).").addText(
       (text) => text.setPlaceholder("e.g. area, project").setValue(this.plugin.settings.chartDefaults.tags).onChange(async (val) => {
         this.plugin.settings.chartDefaults.tags = val;
         await this.plugin.save();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default period").setDesc("The time interval for each data point.").addDropdown(
+    new import_obsidian.Setting(chartPane).setName("Default period").setDesc("The time interval for each data point.").addDropdown(
       (dropdown) => dropdown.addOption("week", "Week").addOption("month", "Month").addOption("quarter", "Quarter").addOption("year", "Year").setValue(this.plugin.settings.chartDefaults.periodType).onChange(async (val) => {
         this.plugin.settings.chartDefaults.periodType = val;
         await this.plugin.save();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default start date").setDesc("Start of the date range (YYYY-MM-DD).").addText(
+    new import_obsidian.Setting(chartPane).setName("Default start date").setDesc("Start of the date range (YYYY-MM-DD).").addText(
       (text) => text.setPlaceholder(`${currentYear}-01-01`).setValue(this.plugin.settings.chartDefaults.startDate).onChange(async (val) => {
         this.plugin.settings.chartDefaults.startDate = val;
         await this.plugin.save();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Default end date").setDesc("End of the date range (YYYY-MM-DD).").addText(
+    new import_obsidian.Setting(chartPane).setName("Default end date").setDesc("End of the date range (YYYY-MM-DD).").addText(
       (text) => text.setPlaceholder(`${currentYear}-12-31`).setValue(this.plugin.settings.chartDefaults.endDate).onChange(async (val) => {
         this.plugin.settings.chartDefaults.endDate = val;
         await this.plugin.save();
       })
     );
+    showTab("filters");
   }
   renderListSection(containerEl, heading, description, placeholder, getItems, onAdd, onRemove) {
     containerEl.createEl("h3", { text: heading });

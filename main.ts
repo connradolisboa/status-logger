@@ -508,9 +508,38 @@ class StatusHistorySettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    containerEl.addClass("status-history-settings");
+
+    const tabs = [
+      { id: "filters", label: "Filters" },
+      { id: "behavior", label: "Behavior" },
+      { id: "chart", label: "Chart Defaults" },
+    ];
+
+    const navEl = containerEl.createDiv({ cls: "status-history-tabs-nav" });
+    const contentEl = containerEl.createDiv({ cls: "status-history-tabs-content" });
+
+    const showTab = (activeId: string) => {
+      navEl.querySelectorAll(".status-history-tab-btn").forEach((btn) => {
+        btn.toggleClass("is-active", btn.getAttribute("data-tab") === activeId);
+      });
+      contentEl.querySelectorAll(".status-history-tab-pane").forEach((pane) => {
+        (pane as HTMLElement).toggle(pane.getAttribute("data-tab") === activeId);
+      });
+    };
+
+    for (const tab of tabs) {
+      const btn = navEl.createEl("button", { text: tab.label, cls: "status-history-tab-btn" });
+      btn.setAttribute("data-tab", tab.id);
+      btn.addEventListener("click", () => showTab(tab.id));
+    }
+
+    // --- Filters tab ---
+    const filtersPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
+    filtersPane.setAttribute("data-tab", "filters");
 
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Included Folders",
       "Log status changes only for files in these folders. Leave empty to include all files (unless excluded).",
       "e.g. Projects/Active",
@@ -526,7 +555,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
     );
 
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Included Tags",
       "Log status changes only for files with these tags. Leave empty to include all files (unless excluded).",
       "e.g. tracked",
@@ -542,7 +571,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
     );
 
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Excluded Folders",
       "Never log status changes for files in these folders. Exclusions take priority over inclusions.",
       "e.g. Archive",
@@ -558,7 +587,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
     );
 
     this.renderListSection(
-      containerEl,
+      filtersPane,
       "Excluded Tags",
       "Never log status changes for files with these tags. Exclusions take priority over inclusions.",
       "e.g. no-log",
@@ -573,7 +602,11 @@ class StatusHistorySettingTab extends PluginSettingTab {
       }
     );
 
-    new Setting(containerEl)
+    // --- Behavior tab ---
+    const behaviorPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
+    behaviorPane.setAttribute("data-tab", "behavior");
+
+    new Setting(behaviorPane)
       .setName("Overwrite same-day entries")
       .setDesc("When enabled, only the latest status change per day is kept instead of logging every change.")
       .addToggle((toggle) =>
@@ -583,7 +616,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
         })
       );
 
-    new Setting(containerEl)
+    new Setting(behaviorPane)
       .setName("Skip duplicate status")
       .setDesc("When enabled, a status change is not logged if it is the same as the most recent entry in the history.")
       .addToggle((toggle) =>
@@ -593,13 +626,16 @@ class StatusHistorySettingTab extends PluginSettingTab {
         })
       );
 
-    containerEl.createEl("h3", { text: "Chart Defaults" });
-    containerEl.createEl("p", {
+    // --- Chart Defaults tab ---
+    const chartPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
+    chartPane.setAttribute("data-tab", "chart");
+
+    chartPane.createEl("p", {
       text: "Default values pre-filled when using the 'Insert status chart' command. Updated automatically when you insert a chart.",
       cls: "setting-item-description",
     });
 
-    new Setting(containerEl)
+    new Setting(chartPane)
       .setName("Default folder")
       .setDesc("Folder path to filter pages by (e.g. Management).")
       .addText((text) =>
@@ -612,7 +648,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(chartPane)
       .setName("Default tags")
       .setDesc("Tags to filter pages by, comma-separated without # (e.g. area, project).")
       .addText((text) =>
@@ -625,7 +661,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(chartPane)
       .setName("Default period")
       .setDesc("The time interval for each data point.")
       .addDropdown((dropdown) =>
@@ -641,7 +677,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(chartPane)
       .setName("Default start date")
       .setDesc("Start of the date range (YYYY-MM-DD).")
       .addText((text) =>
@@ -654,7 +690,7 @@ class StatusHistorySettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(chartPane)
       .setName("Default end date")
       .setDesc("End of the date range (YYYY-MM-DD).")
       .addText((text) =>
@@ -666,6 +702,9 @@ class StatusHistorySettingTab extends PluginSettingTab {
             await this.plugin.save();
           })
       );
+
+    // Show first tab by default
+    showTab("filters");
   }
 
   private renderListSection(
