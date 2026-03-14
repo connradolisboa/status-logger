@@ -1,9 +1,6 @@
 import { App, Modal, Plugin, PluginSettingTab, Setting, TextComponent, TFile } from "obsidian";
 
-interface StatusEntry {
-  dateSet: string;
-  statusSet: string;
-}
+type StatusEntry = Record<string, string>;
 
 type PeriodType = "week" | "month" | "quarter" | "year";
 
@@ -14,6 +11,10 @@ interface PluginSettings {
   excludedTags: string[];
   overwriteSameDay: boolean;
   skipDuplicateStatus: boolean;
+  historyKey: string;
+  dateKey: string;
+  statusKey: string;
+  additionalProperties: { frontmatterKey: string; historyKey: string }[];
   chartDefaults: {
     folder: string;
     tags: string;
@@ -25,6 +26,7 @@ interface PluginSettings {
 
 interface PluginData {
   previousStatuses: Record<string, string>;
+  previousPropertyValues: Record<string, Record<string, string>>;
   settings: PluginSettings;
 }
 
@@ -37,6 +39,10 @@ const DEFAULT_SETTINGS: PluginSettings = {
   excludedTags: [],
   overwriteSameDay: false,
   skipDuplicateStatus: false,
+  historyKey: "status_history",
+  dateKey: "dateSet",
+  statusKey: "statusSet",
+  additionalProperties: [],
   chartDefaults: {
     folder: "",
     tags: "",
@@ -48,6 +54,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
 
 export default class StatusHistoryPlugin extends Plugin {
   private previousStatuses: Map<string, string> = new Map();
+  private previousPropertyValues: Map<string, Record<string, string>> = new Map();
   settings: PluginSettings = { ...DEFAULT_SETTINGS };
 
   async onload() {
@@ -82,7 +89,6 @@ export default class StatusHistoryPlugin extends Plugin {
       this.settings = {
         ...DEFAULT_SETTINGS,
         ...data.settings,
-        // Deep-merge chartDefaults so new fields always get a default value
         chartDefaults: {
           ...DEFAULT_SETTINGS.chartDefaults,
           ...(data.settings.chartDefaults ?? {}),
@@ -92,11 +98,15 @@ export default class StatusHistoryPlugin extends Plugin {
     if (data?.previousStatuses) {
       this.previousStatuses = new Map(Object.entries(data.previousStatuses));
     }
+    if (data?.previousPropertyValues) {
+      this.previousPropertyValues = new Map(Object.entries(data.previousPropertyValues));
+    }
   }
 
   async save() {
     await this.saveData({
       previousStatuses: Object.fromEntries(this.previousStatuses),
+      previousPropertyValues: Object.fromEntries(this.previousPropertyValues),
       settings: this.settings,
     });
   }
@@ -105,9 +115,23 @@ export default class StatusHistoryPlugin extends Plugin {
     const files = this.app.vault.getMarkdownFiles();
     for (const file of files) {
       const cache = this.app.metadataCache.getFileCache(file);
-      const status = cache?.frontmatter?.status;
-      if (status) {
-        this.previousStatuses.set(file.path, status);
+      const fm = cache?.frontmatter;
+      if (!fm) continue;
+      if (fm.status) {
+        this.previousStatuses.set(file.path, String(fm.status));
+      }
+      const props = this.settings.additionalProperties;
+      if (props.length > 0) {
+        const existing = this.previousPropertyValues.get(file.path) ?? {};
+        let changed = false;
+        for (const { frontmatterKey } of props) {
+          const val = fm[frontmatterKey];
+          if (val !== undefined && val !== null && existing[frontmatterKey] === undefined) {
+            existing[frontmatterKey] = String(val);
+            changed = true;
+          }
+        }
+        if (changed) this.previousPropertyValues.set(file.path, existing);
       }
     }
     await this.save();
@@ -149,43 +173,74 @@ export default class StatusHistoryPlugin extends Plugin {
     if (!this.isFileWatched(file)) return;
 
     const cache = this.app.metadataCache.getFileCache(file);
-    const newStatus = cache?.frontmatter?.status;
+    const fm = cache?.frontmatter;
 
-    if (!newStatus) return;
-
+    const newStatus = fm?.status as string | undefined;
     const previousStatus = this.previousStatuses.get(file.path);
+    const statusChanged = newStatus !== undefined && newStatus !== previousStatus;
 
-    if (previousStatus === newStatus) return;
+    const prevProps = this.previousPropertyValues.get(file.path) ?? {};
+    // changedProps: historyKey → new value (for writing to history entry)
+    const changedProps: Record<string, string> = {};
+    // updatedTracking: frontmatterKey → new value (for persisting previous values)
+    const updatedTracking: Record<string, string> = { ...prevProps };
+    for (const { frontmatterKey, historyKey } of this.settings.additionalProperties) {
+      const newVal = fm?.[frontmatterKey];
+      if (newVal === undefined || newVal === null) continue;
+      const strVal = String(newVal);
+      if (prevProps[frontmatterKey] !== undefined && prevProps[frontmatterKey] !== strVal) {
+        changedProps[historyKey] = strVal;
+        updatedTracking[frontmatterKey] = strVal;
+      } else if (prevProps[frontmatterKey] === undefined) {
+        // Establish baseline silently
+        updatedTracking[frontmatterKey] = strVal;
+      }
+    }
 
-    this.previousStatuses.set(file.path, newStatus);
+    if (!statusChanged && Object.keys(changedProps).length === 0) return;
+
+    // Update tracking
+    if (newStatus !== undefined) this.previousStatuses.set(file.path, newStatus);
+    this.previousPropertyValues.set(file.path, updatedTracking);
     await this.save();
 
-    if (!previousStatus) return;
+    // Don't log on first-time baseline (no previous value)
+    const shouldLogStatus = statusChanged && previousStatus !== undefined && !!newStatus;
+    if (!shouldLogStatus && Object.keys(changedProps).length === 0) return;
 
-    await this.appendStatusHistory(file, newStatus);
+    await this.appendStatusHistory(file, shouldLogStatus ? newStatus! : undefined, changedProps);
   }
 
-  async appendStatusHistory(file: TFile, newStatus: string) {
+  async appendStatusHistory(file: TFile, newStatus?: string, changedProps: Record<string, string> = {}) {
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const newEntry: StatusEntry = { dateSet: today, statusSet: newStatus };
+    const { historyKey, dateKey, statusKey } = this.settings;
+
+    const newEntry: StatusEntry = { [dateKey]: today };
+    if (newStatus !== undefined) newEntry[statusKey] = newStatus;
+    for (const [k, v] of Object.entries(changedProps)) newEntry[k] = v;
 
     await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-      const history: StatusEntry[] = Array.isArray(frontmatter.status_history)
-        ? frontmatter.status_history
+      const history: StatusEntry[] = Array.isArray(frontmatter[historyKey])
+        ? frontmatter[historyKey]
         : [];
-      if (this.settings.skipDuplicateStatus && history.length > 0 && history[history.length - 1].statusSet === newStatus) {
+      if (this.settings.skipDuplicateStatus && newStatus !== undefined && history.length > 0 && history[history.length - 1][statusKey] === newStatus) {
         return;
       }
-      if (this.settings.overwriteSameDay && history.length > 0 && history[history.length - 1].dateSet === today) {
-        history[history.length - 1] = newEntry;
+      const lastEntry = history.length > 0 ? history[history.length - 1] : null;
+      const isSameDay = lastEntry?.[dateKey] === today;
+      // Always merge into same-day entry for additional property changes;
+      // for status changes, only merge when overwriteSameDay is enabled.
+      const shouldMerge = isSameDay && (this.settings.overwriteSameDay || newStatus === undefined);
+      if (shouldMerge) {
+        Object.assign(history[history.length - 1], newEntry);
       } else {
         history.push(newEntry);
       }
-      frontmatter.status_history = history;
+      frontmatter[historyKey] = history;
     });
 
-    console.log(`Status History: logged "${newStatus}" for ${file.name}`);
+    console.log(`Status History: logged changes for ${file.name}`);
   }
 
   onunload() {
@@ -206,7 +261,10 @@ function generateChartCode(
   pagesQuery: string,
   periodType: PeriodType,
   startDate: string,
-  endDate: string
+  endDate: string,
+  historyKey: string,
+  dateKey: string,
+  statusKey: string
 ): string {
   const pagesArg = pagesQuery ? JSON.stringify(pagesQuery) : '""';
   return `const todoistColors = {
@@ -304,14 +362,14 @@ const pages = dv.pages(${pagesArg});
 const datasets = [];
 
 for (let page of pages) {
-  const history = page.status_history;
+  const history = page[${JSON.stringify(historyKey)}];
   const createdDate = page.date ? new Date(page.date) : null;
   const rawColor = page.color ?? "charcoal";
   const color = todoistColors[rawColor] ?? rawColor;
 
   const sorted = (history && Array.isArray(history))
     ? history
-        .map(e => ({ date: new Date(e.dateSet + "T00:00:00"), status: e.statusSet }))
+        .map(e => ({ date: new Date(e[${JSON.stringify(dateKey)}] + "T00:00:00"), status: e[${JSON.stringify(statusKey)}] }))
         .sort((a, b) => a.date - b.date)
     : [];
 
@@ -489,7 +547,8 @@ class InsertChartModal extends Modal {
       .map((t) => t.trim())
       .filter((t) => t);
     const pagesQuery = buildPagesQuery(this.folder.trim(), tags);
-    const chartCode = generateChartCode(pagesQuery, this.periodType, this.startDate, this.endDate);
+    const { historyKey, dateKey, statusKey } = this.plugin.settings;
+    const chartCode = generateChartCode(pagesQuery, this.periodType, this.startDate, this.endDate, historyKey, dateKey, statusKey);
 
     editor.replaceRange("```dataviewjs\n" + chartCode + "\n```", editor.getCursor());
   }
@@ -625,6 +684,107 @@ class StatusHistorySettingTab extends PluginSettingTab {
           await this.plugin.save();
         })
       );
+
+    behaviorPane.createEl("h3", { text: "Property Keys" });
+    behaviorPane.createEl("p", {
+      text: "Customize the frontmatter keys used when writing history entries.",
+      cls: "setting-item-description",
+    });
+
+    new Setting(behaviorPane)
+      .setName("History key")
+      .setDesc("The frontmatter key for the history array (default: status_history).")
+      .addText((text) =>
+        text
+          .setPlaceholder("status_history")
+          .setValue(this.plugin.settings.historyKey)
+          .onChange(async (val) => {
+            this.plugin.settings.historyKey = val || "status_history";
+            await this.plugin.save();
+          })
+      );
+
+    new Setting(behaviorPane)
+      .setName("Date key")
+      .setDesc("The key used for the date within each history entry (default: dateSet).")
+      .addText((text) =>
+        text
+          .setPlaceholder("dateSet")
+          .setValue(this.plugin.settings.dateKey)
+          .onChange(async (val) => {
+            this.plugin.settings.dateKey = val || "dateSet";
+            await this.plugin.save();
+          })
+      );
+
+    new Setting(behaviorPane)
+      .setName("Status key")
+      .setDesc("The key used for the status value within each history entry (default: statusSet).")
+      .addText((text) =>
+        text
+          .setPlaceholder("statusSet")
+          .setValue(this.plugin.settings.statusKey)
+          .onChange(async (val) => {
+            this.plugin.settings.statusKey = val || "statusSet";
+            await this.plugin.save();
+          })
+      );
+
+    behaviorPane.createEl("h3", { text: "Additional Tracked Properties" });
+    behaviorPane.createEl("p", {
+      text: "Track changes to other frontmatter properties. Only changed properties are logged in each history entry. 'Frontmatter key' is the property name in the note; 'History key' is the key written in the history entry.",
+      cls: "setting-item-description",
+    });
+
+    const propListEl = behaviorPane.createDiv();
+    const renderPropList = () => {
+      propListEl.empty();
+      for (const item of this.plugin.settings.additionalProperties) {
+        new Setting(propListEl)
+          .setName(`${item.frontmatterKey} → ${item.historyKey}`)
+          .addButton((btn) =>
+            btn
+              .setIcon("trash")
+              .setTooltip("Remove")
+              .onClick(async () => {
+                this.plugin.settings.additionalProperties = this.plugin.settings.additionalProperties.filter(
+                  (p) => p.frontmatterKey !== item.frontmatterKey || p.historyKey !== item.historyKey
+                );
+                await this.plugin.save();
+                renderPropList();
+              })
+          );
+      }
+    };
+    renderPropList();
+
+    let fmKeyInput: TextComponent;
+    let histKeyInput: TextComponent;
+    const addProp = async () => {
+      const fmKey = fmKeyInput.getValue().trim();
+      const histKey = histKeyInput.getValue().trim();
+      if (!fmKey || !histKey) return;
+      if (this.plugin.settings.additionalProperties.some((p) => p.frontmatterKey === fmKey)) return;
+      this.plugin.settings.additionalProperties.push({ frontmatterKey: fmKey, historyKey: histKey });
+      await this.plugin.save();
+      await this.plugin.loadAllStatuses();
+      fmKeyInput.setValue("");
+      histKeyInput.setValue("");
+      renderPropList();
+    };
+
+    new Setting(behaviorPane)
+      .addText((text) => {
+        fmKeyInput = text;
+        text.setPlaceholder("Frontmatter key (e.g. deadline)");
+        text.inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") addProp(); });
+      })
+      .addText((text) => {
+        histKeyInput = text;
+        text.setPlaceholder("History key (e.g. deadlineSet)");
+        text.inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") addProp(); });
+      })
+      .addButton((btn) => btn.setButtonText("Add").onClick(addProp));
 
     // --- Chart Defaults tab ---
     const chartPane = contentEl.createDiv({ cls: "status-history-tab-pane" });

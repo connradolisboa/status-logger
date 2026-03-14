@@ -32,6 +32,10 @@ var DEFAULT_SETTINGS = {
   excludedTags: [],
   overwriteSameDay: false,
   skipDuplicateStatus: false,
+  historyKey: "status_history",
+  dateKey: "dateSet",
+  statusKey: "statusSet",
+  additionalProperties: [],
   chartDefaults: {
     folder: "",
     tags: "",
@@ -44,6 +48,7 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.previousStatuses = /* @__PURE__ */ new Map();
+    this.previousPropertyValues = /* @__PURE__ */ new Map();
     this.settings = { ...DEFAULT_SETTINGS };
   }
   async onload() {
@@ -72,7 +77,6 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
       this.settings = {
         ...DEFAULT_SETTINGS,
         ...data.settings,
-        // Deep-merge chartDefaults so new fields always get a default value
         chartDefaults: {
           ...DEFAULT_SETTINGS.chartDefaults,
           ...data.settings.chartDefaults ?? {}
@@ -82,10 +86,14 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
     if (data?.previousStatuses) {
       this.previousStatuses = new Map(Object.entries(data.previousStatuses));
     }
+    if (data?.previousPropertyValues) {
+      this.previousPropertyValues = new Map(Object.entries(data.previousPropertyValues));
+    }
   }
   async save() {
     await this.saveData({
       previousStatuses: Object.fromEntries(this.previousStatuses),
+      previousPropertyValues: Object.fromEntries(this.previousPropertyValues),
       settings: this.settings
     });
   }
@@ -93,9 +101,23 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
     const files = this.app.vault.getMarkdownFiles();
     for (const file of files) {
       const cache = this.app.metadataCache.getFileCache(file);
-      const status = cache?.frontmatter?.status;
-      if (status) {
-        this.previousStatuses.set(file.path, status);
+      const fm = cache?.frontmatter;
+      if (!fm) continue;
+      if (fm.status) {
+        this.previousStatuses.set(file.path, String(fm.status));
+      }
+      const props = this.settings.additionalProperties;
+      if (props.length > 0) {
+        const existing = this.previousPropertyValues.get(file.path) ?? {};
+        let changed = false;
+        for (const { frontmatterKey } of props) {
+          const val = fm[frontmatterKey];
+          if (val !== void 0 && val !== null && existing[frontmatterKey] === void 0) {
+            existing[frontmatterKey] = String(val);
+            changed = true;
+          }
+        }
+        if (changed) this.previousPropertyValues.set(file.path, existing);
       }
     }
     await this.save();
@@ -125,32 +147,55 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
   async handleMetadataChange(file) {
     if (!this.isFileWatched(file)) return;
     const cache = this.app.metadataCache.getFileCache(file);
-    const newStatus = cache?.frontmatter?.status;
-    if (!newStatus) return;
+    const fm = cache?.frontmatter;
+    const newStatus = fm?.status;
     const previousStatus = this.previousStatuses.get(file.path);
-    if (previousStatus === newStatus) return;
-    this.previousStatuses.set(file.path, newStatus);
+    const statusChanged = newStatus !== void 0 && newStatus !== previousStatus;
+    const prevProps = this.previousPropertyValues.get(file.path) ?? {};
+    const changedProps = {};
+    const updatedTracking = { ...prevProps };
+    for (const { frontmatterKey, historyKey } of this.settings.additionalProperties) {
+      const newVal = fm?.[frontmatterKey];
+      if (newVal === void 0 || newVal === null) continue;
+      const strVal = String(newVal);
+      if (prevProps[frontmatterKey] !== void 0 && prevProps[frontmatterKey] !== strVal) {
+        changedProps[historyKey] = strVal;
+        updatedTracking[frontmatterKey] = strVal;
+      } else if (prevProps[frontmatterKey] === void 0) {
+        updatedTracking[frontmatterKey] = strVal;
+      }
+    }
+    if (!statusChanged && Object.keys(changedProps).length === 0) return;
+    if (newStatus !== void 0) this.previousStatuses.set(file.path, newStatus);
+    this.previousPropertyValues.set(file.path, updatedTracking);
     await this.save();
-    if (!previousStatus) return;
-    await this.appendStatusHistory(file, newStatus);
+    const shouldLogStatus = statusChanged && previousStatus !== void 0 && !!newStatus;
+    if (!shouldLogStatus && Object.keys(changedProps).length === 0) return;
+    await this.appendStatusHistory(file, shouldLogStatus ? newStatus : void 0, changedProps);
   }
-  async appendStatusHistory(file, newStatus) {
+  async appendStatusHistory(file, newStatus, changedProps = {}) {
     const now = /* @__PURE__ */ new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    const newEntry = { dateSet: today, statusSet: newStatus };
+    const { historyKey, dateKey, statusKey } = this.settings;
+    const newEntry = { [dateKey]: today };
+    if (newStatus !== void 0) newEntry[statusKey] = newStatus;
+    for (const [k, v] of Object.entries(changedProps)) newEntry[k] = v;
     await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-      const history = Array.isArray(frontmatter.status_history) ? frontmatter.status_history : [];
-      if (this.settings.skipDuplicateStatus && history.length > 0 && history[history.length - 1].statusSet === newStatus) {
+      const history = Array.isArray(frontmatter[historyKey]) ? frontmatter[historyKey] : [];
+      if (this.settings.skipDuplicateStatus && newStatus !== void 0 && history.length > 0 && history[history.length - 1][statusKey] === newStatus) {
         return;
       }
-      if (this.settings.overwriteSameDay && history.length > 0 && history[history.length - 1].dateSet === today) {
-        history[history.length - 1] = newEntry;
+      const lastEntry = history.length > 0 ? history[history.length - 1] : null;
+      const isSameDay = lastEntry?.[dateKey] === today;
+      const shouldMerge = isSameDay && (this.settings.overwriteSameDay || newStatus === void 0);
+      if (shouldMerge) {
+        Object.assign(history[history.length - 1], newEntry);
       } else {
         history.push(newEntry);
       }
-      frontmatter.status_history = history;
+      frontmatter[historyKey] = history;
     });
-    console.log(`Status History: logged "${newStatus}" for ${file.name}`);
+    console.log(`Status History: logged changes for ${file.name}`);
   }
   onunload() {
     console.log("Status History Plugin unloaded");
@@ -162,7 +207,7 @@ function buildPagesQuery(folder, tags) {
   tags.forEach((t) => parts.push(`#${t}`));
   return parts.join(" and ");
 }
-function generateChartCode(pagesQuery, periodType, startDate, endDate) {
+function generateChartCode(pagesQuery, periodType, startDate, endDate, historyKey, dateKey, statusKey) {
   const pagesArg = pagesQuery ? JSON.stringify(pagesQuery) : '""';
   return `const todoistColors = {
   "berry_red":   "#b8256f",
@@ -259,14 +304,14 @@ const pages = dv.pages(${pagesArg});
 const datasets = [];
 
 for (let page of pages) {
-  const history = page.status_history;
+  const history = page[${JSON.stringify(historyKey)}];
   const createdDate = page.date ? new Date(page.date) : null;
   const rawColor = page.color ?? "charcoal";
   const color = todoistColors[rawColor] ?? rawColor;
 
   const sorted = (history && Array.isArray(history))
     ? history
-        .map(e => ({ date: new Date(e.dateSet + "T00:00:00"), status: e.statusSet }))
+        .map(e => ({ date: new Date(e[${JSON.stringify(dateKey)}] + "T00:00:00"), status: e[${JSON.stringify(statusKey)}] }))
         .sort((a, b) => a.date - b.date)
     : [];
 
@@ -394,7 +439,8 @@ var InsertChartModal = class extends import_obsidian.Modal {
     if (!editor) return;
     const tags = this.tags.split(",").map((t) => t.trim()).filter((t) => t);
     const pagesQuery = buildPagesQuery(this.folder.trim(), tags);
-    const chartCode = generateChartCode(pagesQuery, this.periodType, this.startDate, this.endDate);
+    const { historyKey, dateKey, statusKey } = this.plugin.settings;
+    const chartCode = generateChartCode(pagesQuery, this.periodType, this.startDate, this.endDate, historyKey, dateKey, statusKey);
     editor.replaceRange("```dataviewjs\n" + chartCode + "\n```", editor.getCursor());
   }
 };
@@ -503,6 +549,77 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.save();
       })
     );
+    behaviorPane.createEl("h3", { text: "Property Keys" });
+    behaviorPane.createEl("p", {
+      text: "Customize the frontmatter keys used when writing history entries.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(behaviorPane).setName("History key").setDesc("The frontmatter key for the history array (default: status_history).").addText(
+      (text) => text.setPlaceholder("status_history").setValue(this.plugin.settings.historyKey).onChange(async (val) => {
+        this.plugin.settings.historyKey = val || "status_history";
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(behaviorPane).setName("Date key").setDesc("The key used for the date within each history entry (default: dateSet).").addText(
+      (text) => text.setPlaceholder("dateSet").setValue(this.plugin.settings.dateKey).onChange(async (val) => {
+        this.plugin.settings.dateKey = val || "dateSet";
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(behaviorPane).setName("Status key").setDesc("The key used for the status value within each history entry (default: statusSet).").addText(
+      (text) => text.setPlaceholder("statusSet").setValue(this.plugin.settings.statusKey).onChange(async (val) => {
+        this.plugin.settings.statusKey = val || "statusSet";
+        await this.plugin.save();
+      })
+    );
+    behaviorPane.createEl("h3", { text: "Additional Tracked Properties" });
+    behaviorPane.createEl("p", {
+      text: "Track changes to other frontmatter properties. Only changed properties are logged in each history entry. 'Frontmatter key' is the property name in the note; 'History key' is the key written in the history entry.",
+      cls: "setting-item-description"
+    });
+    const propListEl = behaviorPane.createDiv();
+    const renderPropList = () => {
+      propListEl.empty();
+      for (const item of this.plugin.settings.additionalProperties) {
+        new import_obsidian.Setting(propListEl).setName(`${item.frontmatterKey} \u2192 ${item.historyKey}`).addButton(
+          (btn) => btn.setIcon("trash").setTooltip("Remove").onClick(async () => {
+            this.plugin.settings.additionalProperties = this.plugin.settings.additionalProperties.filter(
+              (p) => p.frontmatterKey !== item.frontmatterKey || p.historyKey !== item.historyKey
+            );
+            await this.plugin.save();
+            renderPropList();
+          })
+        );
+      }
+    };
+    renderPropList();
+    let fmKeyInput;
+    let histKeyInput;
+    const addProp = async () => {
+      const fmKey = fmKeyInput.getValue().trim();
+      const histKey = histKeyInput.getValue().trim();
+      if (!fmKey || !histKey) return;
+      if (this.plugin.settings.additionalProperties.some((p) => p.frontmatterKey === fmKey)) return;
+      this.plugin.settings.additionalProperties.push({ frontmatterKey: fmKey, historyKey: histKey });
+      await this.plugin.save();
+      await this.plugin.loadAllStatuses();
+      fmKeyInput.setValue("");
+      histKeyInput.setValue("");
+      renderPropList();
+    };
+    new import_obsidian.Setting(behaviorPane).addText((text) => {
+      fmKeyInput = text;
+      text.setPlaceholder("Frontmatter key (e.g. deadline)");
+      text.inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") addProp();
+      });
+    }).addText((text) => {
+      histKeyInput = text;
+      text.setPlaceholder("History key (e.g. deadlineSet)");
+      text.inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") addProp();
+      });
+    }).addButton((btn) => btn.setButtonText("Add").onClick(addProp));
     const chartPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
     chartPane.setAttribute("data-tab", "chart");
     chartPane.createEl("p", {
