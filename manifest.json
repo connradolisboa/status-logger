@@ -1,9 +1,9 @@
 {
-  "id": "status-history",
-  "name": "Status History",
+  "id": "property-logs",
+  "name": "Property Logs",
   "version": "1.5.0",
   "minAppVersion": "1.0.0",
-  "description": "Automatically logs status changes with timestamps to status_history frontmatter.",
+  "description": "Automatically logs property changes with timestamps to property_history frontmatter.",
   "author": "Connrado",
   "isDesktopOnly": false
 }

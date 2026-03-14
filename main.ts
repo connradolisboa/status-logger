@@ -39,7 +39,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
   excludedTags: [],
   overwriteSameDay: false,
   skipDuplicateStatus: false,
-  historyKey: "status_history",
+  historyKey: "property_history",
   dateKey: "dateSet",
   statusKey: "statusSet",
   additionalProperties: [],
@@ -52,13 +52,13 @@ const DEFAULT_SETTINGS: PluginSettings = {
   },
 };
 
-export default class StatusHistoryPlugin extends Plugin {
+export default class PropertyLogsPlugin extends Plugin {
   private previousStatuses: Map<string, string> = new Map();
   private previousPropertyValues: Map<string, Record<string, string>> = new Map();
   settings: PluginSettings = { ...DEFAULT_SETTINGS };
 
   async onload() {
-    console.log("Status History Plugin loaded");
+    console.log("Property Logs Plugin loaded");
 
     await this.load_();
 
@@ -69,6 +69,17 @@ export default class StatusHistoryPlugin extends Plugin {
       name: "Insert status chart",
       editorCallback: () => {
         new InsertChartModal(this.app, this).open();
+      },
+    });
+
+    this.addCommand({
+      id: "add-comment-to-note",
+      name: "Add comment to note",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (!checking) new AddCommentModal(this.app, this, file).open();
+        return true;
       },
     });
 
@@ -240,11 +251,11 @@ export default class StatusHistoryPlugin extends Plugin {
       frontmatter[historyKey] = history;
     });
 
-    console.log(`Status History: logged changes for ${file.name}`);
+    console.log(`Property Logs: logged changes for ${file.name}`);
   }
 
   onunload() {
-    console.log("Status History Plugin unloaded");
+    console.log("Property Logs Plugin unloaded");
   }
 }
 
@@ -448,14 +459,14 @@ window.renderChart(chartData, this.container);`;
 // ─── Insert Chart Modal ───────────────────────────────────────────────────────
 
 class InsertChartModal extends Modal {
-  private plugin: StatusHistoryPlugin;
+  private plugin: PropertyLogsPlugin;
   private folder: string;
   private tags: string;
   private periodType: PeriodType;
   private startDate: string;
   private endDate: string;
 
-  constructor(app: App, plugin: StatusHistoryPlugin) {
+  constructor(app: App, plugin: PropertyLogsPlugin) {
     super(app);
     this.plugin = plugin;
     this.folder = plugin.settings.chartDefaults.folder;
@@ -554,12 +565,78 @@ class InsertChartModal extends Modal {
   }
 }
 
+// ─── Add Comment Modal ────────────────────────────────────────────────────────
+
+class AddCommentModal extends Modal {
+  private plugin: PropertyLogsPlugin;
+  private file: TFile;
+  private comment: string = "";
+
+  constructor(app: App, plugin: PropertyLogsPlugin, file: TFile) {
+    super(app);
+    this.plugin = plugin;
+    this.file = file;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Add comment to note" });
+
+    new Setting(contentEl)
+      .setName("Comment")
+      .addText((text) => {
+        text.setPlaceholder("Enter comment…").onChange((val) => (this.comment = val));
+        text.inputEl.style.width = "100%";
+        text.inputEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { this.submit(); }
+        });
+        setTimeout(() => text.inputEl.focus(), 50);
+      });
+
+    new Setting(contentEl)
+      .addButton((btn) =>
+        btn.setButtonText("Add").setCta().onClick(() => this.submit())
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Cancel").onClick(() => this.close())
+      );
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+
+  private async submit() {
+    const comment = this.comment.trim();
+    if (!comment) return;
+
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const { historyKey, dateKey } = this.plugin.settings;
+
+    await this.plugin.app.fileManager.processFrontMatter(this.file, (frontmatter) => {
+      const history: StatusEntry[] = Array.isArray(frontmatter[historyKey])
+        ? frontmatter[historyKey]
+        : [];
+      const lastEntry = history.length > 0 ? history[history.length - 1] : null;
+      if (lastEntry && lastEntry[dateKey] === today) {
+        lastEntry["comment"] = comment;
+      } else {
+        history.push({ [dateKey]: today, comment });
+      }
+      frontmatter[historyKey] = history;
+    });
+
+    this.close();
+  }
+}
+
 // ─── Settings Tab ────────────────────────────────────────────────────────────
 
 class StatusHistorySettingTab extends PluginSettingTab {
-  plugin: StatusHistoryPlugin;
+  plugin: PropertyLogsPlugin;
 
-  constructor(app: App, plugin: StatusHistoryPlugin) {
+  constructor(app: App, plugin: PropertyLogsPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }

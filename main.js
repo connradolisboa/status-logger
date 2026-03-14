@@ -20,7 +20,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // main.ts
 var main_exports = {};
 __export(main_exports, {
-  default: () => StatusHistoryPlugin
+  default: () => PropertyLogsPlugin
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
@@ -32,7 +32,7 @@ var DEFAULT_SETTINGS = {
   excludedTags: [],
   overwriteSameDay: false,
   skipDuplicateStatus: false,
-  historyKey: "status_history",
+  historyKey: "property_history",
   dateKey: "dateSet",
   statusKey: "statusSet",
   additionalProperties: [],
@@ -44,7 +44,7 @@ var DEFAULT_SETTINGS = {
     endDate: `${currentYear}-12-31`
   }
 };
-var StatusHistoryPlugin = class extends import_obsidian.Plugin {
+var PropertyLogsPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.previousStatuses = /* @__PURE__ */ new Map();
@@ -52,7 +52,7 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
     this.settings = { ...DEFAULT_SETTINGS };
   }
   async onload() {
-    console.log("Status History Plugin loaded");
+    console.log("Property Logs Plugin loaded");
     await this.load_();
     this.addSettingTab(new StatusHistorySettingTab(this.app, this));
     this.addCommand({
@@ -60,6 +60,16 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
       name: "Insert status chart",
       editorCallback: () => {
         new InsertChartModal(this.app, this).open();
+      }
+    });
+    this.addCommand({
+      id: "add-comment-to-note",
+      name: "Add comment to note",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file) return false;
+        if (!checking) new AddCommentModal(this.app, this, file).open();
+        return true;
       }
     });
     this.app.workspace.onLayoutReady(() => {
@@ -195,10 +205,10 @@ var StatusHistoryPlugin = class extends import_obsidian.Plugin {
       }
       frontmatter[historyKey] = history;
     });
-    console.log(`Status History: logged changes for ${file.name}`);
+    console.log(`Property Logs: logged changes for ${file.name}`);
   }
   onunload() {
-    console.log("Status History Plugin unloaded");
+    console.log("Property Logs Plugin unloaded");
   }
 };
 function buildPagesQuery(folder, tags) {
@@ -442,6 +452,54 @@ var InsertChartModal = class extends import_obsidian.Modal {
     const { historyKey, dateKey, statusKey } = this.plugin.settings;
     const chartCode = generateChartCode(pagesQuery, this.periodType, this.startDate, this.endDate, historyKey, dateKey, statusKey);
     editor.replaceRange("```dataviewjs\n" + chartCode + "\n```", editor.getCursor());
+  }
+};
+var AddCommentModal = class extends import_obsidian.Modal {
+  constructor(app, plugin, file) {
+    super(app);
+    this.comment = "";
+    this.plugin = plugin;
+    this.file = file;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h2", { text: "Add comment to note" });
+    new import_obsidian.Setting(contentEl).setName("Comment").addText((text) => {
+      text.setPlaceholder("Enter comment\u2026").onChange((val) => this.comment = val);
+      text.inputEl.style.width = "100%";
+      text.inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          this.submit();
+        }
+      });
+      setTimeout(() => text.inputEl.focus(), 50);
+    });
+    new import_obsidian.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText("Add").setCta().onClick(() => this.submit())
+    ).addButton(
+      (btn) => btn.setButtonText("Cancel").onClick(() => this.close())
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+  async submit() {
+    const comment = this.comment.trim();
+    if (!comment) return;
+    const now = /* @__PURE__ */ new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const { historyKey, dateKey } = this.plugin.settings;
+    await this.plugin.app.fileManager.processFrontMatter(this.file, (frontmatter) => {
+      const history = Array.isArray(frontmatter[historyKey]) ? frontmatter[historyKey] : [];
+      const lastEntry = history.length > 0 ? history[history.length - 1] : null;
+      if (lastEntry && lastEntry[dateKey] === today) {
+        lastEntry["comment"] = comment;
+      } else {
+        history.push({ [dateKey]: today, comment });
+      }
+      frontmatter[historyKey] = history;
+    });
+    this.close();
   }
 };
 var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
