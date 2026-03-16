@@ -1,95 +1,307 @@
-# Status History
+# Property Logs
 
-An [Obsidian](https://obsidian.md) plugin that automatically logs `status` frontmatter changes with timestamps, and lets you visualize status over time as a chart.
+An [Obsidian](https://obsidian.md) plugin that automatically logs property changes in frontmatter with timestamps. Track status updates, deadline changes, priority shifts, and any other property mutations to build a rich audit trail for your notes.
 
 ## Features
 
-- **Automatic logging** — When a note's `status` frontmatter field changes, the plugin appends an entry to `status_history` with the new status and today's date.
-- **Scoped tracking** — Include or exclude specific folders and tags to control which notes are tracked.
-- **Chart insertion** — Insert a `dataviewjs` chart block that visualizes status history across multiple notes over time (requires [Dataview](https://github.com/blacksmithgu/obsidian-dataview) and [Obsidian Charts](https://github.com/phibr0/obsidian-charts)).
+- **Automatic property tracking** — Watch any frontmatter property for changes and automatically log them to a history array with timestamps
+- **Flexible filtering** — Include/exclude specific folders and tags to control which notes are tracked
+- **Smart deduplication** — Optionally skip logging duplicate status values or overwrite same-day entries
+- **Comments** — Add timestamped comments to notes to annotate status history
+- **Visual status charts** — Insert interactive charts that visualize how status evolved over time across multiple notes (requires [Dataview](https://github.com/blacksmithgu/obsidian-dataview) and [Obsidian Charts](https://github.com/phibr0/obsidian-charts))
+- **Customizable keys** — Rename the history key and property names to match your vault's naming conventions
+- **Multiple tracked properties** — Go beyond status—track deadline changes, priority updates, assignees, or any other property
+
+## Use Cases
+
+### Project & Task Management
+- **Track project status evolution** — See how a project moved from Planned → Active → Completed with exact dates
+- **Monitor milestone deadlines** — Log when deadlines shift, detect scope creep
+- **Visualize team capacity** — Chart how many projects were Active, In Progress, or Blocked each month
+
+### Content Management
+- **Publishing workflow** — Track Draft → Review → Scheduled → Published with timestamps
+- **Content priority tracking** — Monitor how content priorities changed before publication
+- **Audience reach visualization** — Chart how many articles were Featured vs. Archived each period
+
+### Knowledge Management
+- **Note maturity tracking** — Watch notes progress from Seedling → Growing → Evergreen
+- **Research status** — Monitor whether research topics are Exploring, Consolidating, or Complete
+- **Learning progress** — Chart concept mastery levels over time
+
+### OKR & Goal Tracking
+- **Goal progress** — Log goal status changes (Planning → Active → Achieved → Archived)
+- **Quarterly performance** — Visualize OKR completion rates per quarter
+- **Initiative tracking** — Monitor initiatives across pipeline stages
+
+### General Audit Trails
+- **Change history** — Maintain a full audit trail of any property that matters to you
+- **Decision documentation** — Log when decisions change status with optional comments
+- **Compliance** — Create timestamped records of status/property changes for audit purposes
 
 ## How It Works
 
-The plugin watches the metadata cache. When a file's `status` field changes (and the file is in scope), it appends a new entry to the note's `status_history` frontmatter list:
+The plugin monitors your vault's metadata cache. When a property in a watched note changes, it automatically appends an entry to a configurable history array in the note's frontmatter. Only changes are logged—the first time a property is seen, it becomes the baseline.
+
+### Example
+
+A note with `status` changes might look like this:
 
 ```yaml
+---
+title: Launch new website
 status: Active
+color: blue
 status_history:
   - dateSet: "2025-01-15"
     statusSet: Backlog
-  - dateSet: "2025-03-02"
+  - dateSet: "2025-02-20"
     statusSet: Active
+---
 ```
 
-The first time a status is seen for a note, no entry is logged (it becomes the baseline). Every subsequent change is recorded.
+If you track additional properties (e.g., `deadline`), changed values appear in the same history entry:
+
+```yaml
+---
+title: Launch new website
+status: Active
+deadline: "2025-04-30"
+status_history:
+  - dateSet: "2025-01-15"
+    statusSet: Backlog
+  - dateSet: "2025-02-20"
+    statusSet: Active
+    deadlineSet: "2025-04-30"
+  - dateSet: "2025-02-28"
+    comment: "Deadline extended due to scope changes"
+    deadlineSet: "2025-05-15"
+---
+```
 
 ## Installation
 
-1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/connradolisboa/status-logger/releases).
-2. Place them in your vault under `.obsidian/plugins/status-history/`.
-3. Enable the plugin in **Settings → Community Plugins**.
+1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/connradolisboa/status-logger/releases)
+2. Create a folder `.obsidian/plugins/property-logs/` in your vault
+3. Place both files in that folder
+4. Reload Obsidian or restart it
+5. Go to **Settings → Community Plugins** and enable **Property Logs**
 
-## Usage
+Alternatively, install via [BRAT](https://github.com/TfTHacker/obsidian42-brat) (Obsidian plugin manager):
 
-### Tracking status changes
+1. Install BRAT and enable it
+2. Add the repository: `https://github.com/connradolisboa/status-logger`
+3. Enable **Property Logs** in Community Plugins
 
-Just set a `status` field in any note's frontmatter. The plugin tracks it automatically based on your filter settings.
+## Configuration
 
-Supported status values for the chart:
+### Settings Overview
 
-| Status | Chart level |
-|---|---|
-| Inactive | 1 |
-| New | 1 |
-| Cancelled | 1 |
-| Backlog | 2 |
-| Ongoing | 3 |
-| Active | 4 |
-| Done | 5 |
+Open **Settings → Property Logs** to configure three main sections: Filters, Behavior, and Chart Defaults.
 
-### Inserting a chart
+#### Filters Tab
 
-Run the command **"Insert status chart"** from the command palette. A modal will appear where you can configure:
-
-- **Folder** — Filter pages by a vault folder path (e.g. `Projects`).
-- **Tags** — Filter pages by tags, comma-separated without `#` (e.g. `area, project`).
-- **Period** — Time interval for the X axis: Week, Month, Quarter, or Year.
-- **Start / End date** — Date range for the chart (`YYYY-MM-DD`).
-
-The chart is inserted as a `dataviewjs` code block at the cursor position.
-
-> **Requirements:** [Dataview](https://github.com/blacksmithgu/obsidian-dataview) and [Obsidian Charts](https://github.com/phibr0/obsidian-charts) must be installed and enabled.
-
-### Chart behavior
-
-- Each note is a line on the chart, colored by its `color` frontmatter field (Todoist color names supported, e.g. `blue`, `green`, `grape`).
-- Notes created after a period's end are not shown for that period.
-- Notes with no history yet show as `Inactive`.
-- Point shapes distinguish `Inactive` (circle), `New` (triangle), and `Cancelled` (cross).
-
-## Settings
-
-Open **Settings → Status History** to configure:
-
-### File Filters
+Control which notes the plugin monitors:
 
 | Setting | Description |
-|---|---|
-| Included Folders | Only track files inside these folders. Leave empty to track all files. |
-| Included Tags | Only track files with these tags. Leave empty to track all files. |
-| Excluded Folders | Never track files inside these folders. Takes priority over inclusions. |
-| Excluded Tags | Never track files with these tags. Takes priority over inclusions. |
+|---------|-------------|
+| **Included Folders** | Only track files in these folders. Leave empty to track all (unless excluded). You can specify paths like `Projects` or `Projects/Active`. |
+| **Included Tags** | Only track files with these tags. Leave empty to track all (unless excluded). Tags are specified without the `#` symbol (e.g., `tracked`, `monitored`). |
+| **Excluded Folders** | Never track files in these folders. Exclusions take priority over inclusions. |
+| **Excluded Tags** | Never track files with these tags. Exclusions take priority over inclusions. |
 
-You can enter multiple values separated by commas, or add them one at a time.
+**Examples:**
+- Track only files in the `Projects` folder: Add `Projects` to Included Folders
+- Track all files except archive: Add `Archive` to Excluded Folders
+- Track files tagged with `tracked` and `important`: Add both to Included Tags
+- Track everything except files tagged `no-log`: Add `no-log` to Excluded Tags
 
-### Chart Defaults
+#### Behavior Tab
 
-Default values pre-filled when opening the "Insert status chart" modal. These are also saved automatically each time you insert a chart.
+Customize logging behavior and property names:
 
-## Notes
+##### Logging Options
 
-- The plugin uses `processFrontMatter` internally, so all edits go through Obsidian's frontmatter API and are non-destructive.
-- The `previousStatuses` map is persisted in the plugin data file so status baselines survive vault restarts.
+| Setting | Description |
+|---------|-------------|
+| **Overwrite same-day entries** | When enabled, only the latest change per day is kept (older changes the same day are replaced). Useful to avoid cluttering history with minor adjustments. |
+| **Skip duplicate status** | When enabled, a status change is not logged if it matches the most recent entry. Prevents logging redundant state transitions. |
+
+##### Property Keys
+
+Customize the frontmatter keys used in history entries:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **History key** | `property_history` | The frontmatter array where all history entries are stored |
+| **Date key** | `dateSet` | The field name used for the date within each history entry |
+| **Status key** | `statusSet` | The field name used for the status value within each history entry |
+
+Change these if your vault uses different naming conventions (e.g., use `timestamp` instead of `dateSet`).
+
+##### Additional Tracked Properties
+
+Beyond status, track any other frontmatter property. Specify:
+- **Frontmatter key** — The property name in your note (e.g., `deadline`, `priority`, `assignee`)
+- **History key** — The key to use in history entries (e.g., `deadlineSet`, `prioritySet`)
+
+**Example:** To track deadline changes alongside status:
+- Add Frontmatter key: `deadline`
+- Add History key: `deadlineSet`
+
+When the `deadline` property changes, it appears in the history entry:
+```yaml
+- dateSet: "2025-02-28"
+  deadlineSet: "2025-05-15"
+  comment: "Deadline extended"
+```
+
+#### Chart Defaults Tab
+
+Pre-fill defaults when inserting charts. These are automatically updated each time you insert a chart with custom parameters.
+
+| Setting | Description |
+|---------|-------------|
+| **Default folder** | Folder path to filter pages by (e.g., `Projects`) |
+| **Default tags** | Tags to filter pages by, comma-separated without `#` (e.g., `area, project`) |
+| **Default period** | Time interval for chart X-axis: Week, Month, Quarter, or Year |
+| **Default start date** | Start of the date range (`YYYY-MM-DD` format) |
+| **Default end date** | End of the date range (`YYYY-MM-DD` format) |
+
+## Commands
+
+The plugin adds two commands (accessible via Ctrl/Cmd+P command palette):
+
+### Insert Status Chart
+
+Opens a modal to configure and insert a dataviewjs chart block.
+
+**Parameters:**
+- **Folder** — Filter pages by vault folder path (e.g., `Projects`). Leave blank for all folders.
+- **Tags** — Filter pages by tags, comma-separated without `#` (e.g., `area, project`). Leave blank for all tags.
+- **Period** — Time interval for the X-axis: Week, Month, Quarter, or Year
+- **Start date** — Start of the date range (`YYYY-MM-DD`)
+- **End date** — End of the date range (`YYYY-MM-DD`)
+
+The chart is inserted as a dataviewjs code block at your cursor position.
+
+**Requirements:** [Dataview](https://github.com/blacksmithgu/obsidian-dataview) and [Obsidian Charts](https://github.com/phibr0/obsidian-charts) must be installed and enabled.
+
+### Add Comment to Note
+
+Opens a modal to add a timestamped comment to the current note's history.
+
+Comments are logged to the same history entry as status changes on the same day (or create a new entry if no status change occurred). Useful for annotating why a status changed or adding context to a property change.
+
+## Supported Status Values
+
+The chart recognizes these standard status values. They map to numeric levels for visualization:
+
+| Status | Level | Appearance |
+|--------|-------|------------|
+| Inactive, New, Cancelled | 1 | Circle marker |
+| Backlog | 2 | — |
+| Ongoing | 3 | — |
+| Active | 4 | — |
+| Done | 5 | — |
+
+Use any other status values; they'll appear as blank on the chart but are still logged in history.
+
+## Chart Behavior
+
+- **Multi-line visualization** — Each note becomes a line on the chart, colored by its `color` frontmatter field
+- **Supported colors** — Todoist color names (e.g., `blue`, `green`, `grape`, `red`, `orange`) or hex codes (e.g., `#FF5733`)
+- **Baseline value** — Notes with no history yet show as `Inactive`
+- **Future periods** — Notes created after a period's end don't appear for earlier periods
+- **Shape markers** — Special point shapes distinguish Inactive (●), New (▲), and Cancelled (✕)
+- **Time spanning** — Chart spans entire date range even if some notes have no data
+
+## Examples
+
+### Example 1: Track Project Status
+
+Set up tracking for projects in the `Projects` folder:
+
+1. Add `Projects` to **Included Folders** in settings
+2. Add a `status` field to project notes: `status: Backlog`
+3. Change the status as work progresses → The plugin logs each change automatically
+4. Run **Insert Status Chart** and filter by folder `Projects` to visualize progress
+
+### Example 2: Track Multiple Properties
+
+Monitor both status and deadline for tasks:
+
+1. In **Additional Tracked Properties**, add:
+   - Frontmatter key: `deadline` → History key: `deadlineSet`
+   - Frontmatter key: `priority` → History key: `prioritySet`
+2. Add to your notes:
+   ```yaml
+   status: Backlog
+   deadline: "2025-04-30"
+   priority: P2
+   ```
+3. When either `deadline` or `priority` changes, both appear in the history:
+   ```yaml
+   - dateSet: "2025-02-28"
+     statusSet: Active
+     deadlineSet: "2025-05-15"
+     prioritySet: P1
+   ```
+
+### Example 3: Selective Tracking
+
+Track all project notes except archived ones:
+
+1. Add `Projects` to **Included Folders**
+2. Add `Archive` to **Excluded Folders**
+3. Now only active project notes in `Projects` are tracked (excluding `Projects/Archive`)
+
+### Example 4: Tag-Based Tracking
+
+Track only notes tagged with `tracked`:
+
+1. Add `tracked` to **Included Tags**
+2. Leave folders empty
+3. Only notes with the `tracked` tag will be monitored
+
+Add the tag to any note you want to monitor, regardless of folder.
+
+## Tips & Tricks
+
+- **Separate concerns** — Use included folders for broad scoping (e.g., all projects) and tags for fine-grained control (e.g., only "high-visibility" projects)
+- **Comments for context** — Use "Add comment to note" to annotate why a status changed for later review
+- **Consolidate same-day changes** — Enable "Overwrite same-day entries" if you frequently adjust properties and only care about the final state per day
+- **Chart filtering** — Always check the chart command's folder/tags to ensure you're visualizing the right subset of notes
+- **Baseline stability** — The first time a property is seen becomes the baseline (not logged). Subsequent changes are logged. This prevents spurious entries when enabling tracking on an existing note
+
+## How It Compares
+
+| Feature | Property Logs | Obsidian Dataview | Obsidian Tasks |
+|---------|---------------|-------------------|-----------------|
+| Auto-log property changes | ✓ | ✗ | ✗ |
+| Track any property | ✓ | ✗ | Partial |
+| History per note | ✓ | ✗ | ✗ |
+| Status timeline charts | ✓ | Manual queries | Task-only |
+| Comments in history | ✓ | ✗ | ✗ |
+| Configurable filtering | ✓ | ✓ | ✗ |
+
+## Limitations
+
+- Charts require [Dataview](https://github.com/blacksmithgu/obsidian-dataview) and [Obsidian Charts](https://github.com/phibr0/obsidian-charts) plugins
+- Status values outside the standard set (Inactive, Backlog, Ongoing, Active, Done, etc.) won't be charted but are still logged
+- Charts don't currently support filtering by multiple status values simultaneously
+- Property changes are logged based on metadata cache updates; changes not reflected in the cache may not be detected
+
+## Technical Details
+
+- **Non-destructive** — All frontmatter edits use Obsidian's `processFrontMatter` API
+- **Persistent state** — Baseline property values are saved to plugin data, so tracking state survives vault restarts
+- **Metadata cache** — The plugin listens to metadata cache changes, so updates are instant within Obsidian
+- **No external APIs** — All logging and charting happens locally in your vault
+
+## Support
+
+Found a bug or have a feature request? Open an issue on [GitHub](https://github.com/connradolisboa/status-logger/issues).
 
 ## License
 
