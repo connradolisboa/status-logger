@@ -42,6 +42,13 @@ var DEFAULT_SETTINGS = {
     periodType: "month",
     startDate: `${currentYear}-01-01`,
     endDate: `${currentYear}-12-31`
+  },
+  dailyNoteLog: {
+    enabled: false,
+    folder: "",
+    dateFormat: "YYYY-MM-DD",
+    heading: "",
+    groups: []
   }
 };
 var PropertyLogsPlugin = class extends import_obsidian.Plugin {
@@ -90,6 +97,11 @@ var PropertyLogsPlugin = class extends import_obsidian.Plugin {
         chartDefaults: {
           ...DEFAULT_SETTINGS.chartDefaults,
           ...data.settings.chartDefaults ?? {}
+        },
+        dailyNoteLog: {
+          ...DEFAULT_SETTINGS.dailyNoteLog,
+          ...data.settings.dailyNoteLog ?? {},
+          groups: data.settings.dailyNoteLog?.groups ?? []
         }
       };
     }
@@ -163,6 +175,7 @@ var PropertyLogsPlugin = class extends import_obsidian.Plugin {
     const statusChanged = newStatus !== void 0 && newStatus !== previousStatus;
     const prevProps = this.previousPropertyValues.get(file.path) ?? {};
     const changedProps = {};
+    const realChanges = [];
     const updatedTracking = { ...prevProps };
     for (const { frontmatterKey, historyKey } of this.settings.additionalProperties) {
       const newVal = fm?.[frontmatterKey];
@@ -171,6 +184,7 @@ var PropertyLogsPlugin = class extends import_obsidian.Plugin {
       if (prevProps[frontmatterKey] !== void 0 && prevProps[frontmatterKey] !== strVal) {
         changedProps[historyKey] = strVal;
         updatedTracking[frontmatterKey] = strVal;
+        realChanges.push({ fmKey: frontmatterKey, histKey: historyKey, from: prevProps[frontmatterKey], to: strVal });
       } else if (prevProps[frontmatterKey] === void 0) {
         updatedTracking[frontmatterKey] = strVal;
       }
@@ -181,7 +195,11 @@ var PropertyLogsPlugin = class extends import_obsidian.Plugin {
     await this.save();
     const shouldLogStatus = statusChanged && previousStatus !== void 0 && !!newStatus;
     if (!shouldLogStatus && Object.keys(changedProps).length === 0) return;
+    if (shouldLogStatus) {
+      realChanges.unshift({ fmKey: "status", histKey: this.settings.statusKey, from: previousStatus, to: newStatus });
+    }
     await this.appendStatusHistory(file, shouldLogStatus ? newStatus : void 0, changedProps);
+    await this.logChangesToDailyNote(file, realChanges);
   }
   normalizeEntry(entry) {
     const { dateKey, statusKey, additionalProperties } = this.settings;
@@ -219,6 +237,125 @@ var PropertyLogsPlugin = class extends import_obsidian.Plugin {
       frontmatter[historyKey] = history;
     });
     console.log(`Property Logs: logged changes for ${file.name}`);
+  }
+  // ─── Daily Note Logging ─────────────────────────────────────────────────────
+  getFileTagsSet(file) {
+    const cache = this.app.metadataCache.getFileCache(file);
+    const tags = /* @__PURE__ */ new Set();
+    const fmTags = cache?.frontmatter?.tags;
+    if (Array.isArray(fmTags)) fmTags.forEach((t) => tags.add(String(t)));
+    else if (fmTags != null) tags.add(String(fmTags));
+    cache?.tags?.forEach((t) => tags.add(t.tag.replace(/^#/, "")));
+    return tags;
+  }
+  findMatchingDailyNoteGroup(file) {
+    const fileTags = this.getFileTagsSet(file);
+    for (const group of this.settings.dailyNoteLog.groups) {
+      const tag = group.tag.trim();
+      if (!tag) continue;
+      if (fileTags.has(tag)) return group;
+    }
+    return null;
+  }
+  resolveDailyNoteConfig() {
+    const fallback = {
+      folder: this.settings.dailyNoteLog.folder,
+      format: this.settings.dailyNoteLog.dateFormat || "YYYY-MM-DD"
+    };
+    const internalPlugins = this.app.internalPlugins;
+    const dn = internalPlugins?.getPluginById?.("daily-notes") ?? internalPlugins?.plugins?.["daily-notes"];
+    if (dn?.enabled) {
+      const opts = dn.instance?.options ?? {};
+      return {
+        folder: typeof opts.folder === "string" && opts.folder ? opts.folder : fallback.folder,
+        format: typeof opts.format === "string" && opts.format ? opts.format : fallback.format
+      };
+    }
+    return fallback;
+  }
+  async getOrCreateDailyNote() {
+    const { folder, format } = this.resolveDailyNoteConfig();
+    const filename = `${(0, import_obsidian.moment)().format(format)}.md`;
+    const path = (0, import_obsidian.normalizePath)(folder ? `${folder}/${filename}` : filename);
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof import_obsidian.TFile) return existing;
+    if (folder) {
+      const folderPath = (0, import_obsidian.normalizePath)(folder);
+      if (!this.app.vault.getAbstractFileByPath(folderPath)) {
+        await this.app.vault.createFolder(folderPath);
+      }
+    }
+    return await this.app.vault.create(path, "");
+  }
+  formatTemplate(template, vars) {
+    return template.replace(/\{\{(\w+)\}\}/g, (_match, key) => vars[key] ?? "");
+  }
+  async appendToDailyNote(file, line, heading) {
+    await this.app.vault.process(file, (content) => {
+      if (!heading.trim()) {
+        const sep = content.length === 0 || content.endsWith("\n") ? "" : "\n";
+        return content + sep + line + "\n";
+      }
+      const headingTrimmed = heading.trim();
+      const headingMatch = headingTrimmed.match(/^(#+)\s/);
+      const level = headingMatch ? headingMatch[1].length : 0;
+      const lines = content.split("\n");
+      let headingIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === headingTrimmed) {
+          headingIdx = i;
+          break;
+        }
+      }
+      if (headingIdx === -1) {
+        const prefix = content.length === 0 ? "" : content.endsWith("\n\n") ? "" : content.endsWith("\n") ? "\n" : "\n\n";
+        return content + prefix + headingTrimmed + "\n" + line + "\n";
+      }
+      let sectionEnd = lines.length;
+      if (level > 0) {
+        for (let i = headingIdx + 1; i < lines.length; i++) {
+          const m = lines[i].match(/^(#+)\s/);
+          if (m && m[1].length <= level) {
+            sectionEnd = i;
+            break;
+          }
+        }
+      }
+      let insertAt = sectionEnd;
+      while (insertAt > headingIdx + 1 && lines[insertAt - 1].trim() === "") {
+        insertAt--;
+      }
+      lines.splice(insertAt, 0, line);
+      return lines.join("\n");
+    });
+  }
+  async logChangesToDailyNote(file, changes) {
+    if (!this.settings.dailyNoteLog.enabled) return;
+    if (changes.length === 0) return;
+    const group = this.findMatchingDailyNoteGroup(file);
+    if (!group) return;
+    const watched = group.watchedKeys.map((k) => k.trim()).filter((k) => k);
+    const filtered = watched.length > 0 ? changes.filter((c) => watched.includes(c.fmKey)) : changes;
+    if (filtered.length === 0) return;
+    const dailyNote = await this.getOrCreateDailyNote();
+    if (dailyNote.path === file.path) return;
+    const now = (0, import_obsidian.moment)();
+    const date = now.format("YYYY-MM-DD");
+    const time = now.format("HH:mm");
+    for (const change of filtered) {
+      const vars = {
+        link: `[[${file.basename}]]`,
+        name: file.basename,
+        path: file.path,
+        key: group.keyForm === "history" ? change.histKey : change.fmKey,
+        from: change.from,
+        to: change.to,
+        date,
+        time
+      };
+      const line = this.formatTemplate(group.template, vars);
+      await this.appendToDailyNote(dailyNote, line, this.settings.dailyNoteLog.heading);
+    }
   }
   onunload() {
     console.log("Property Logs Plugin unloaded");
@@ -527,6 +664,7 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
     const tabs = [
       { id: "filters", label: "Filters" },
       { id: "behavior", label: "Behavior" },
+      { id: "daily", label: "Daily Note Log" },
       { id: "chart", label: "Chart Defaults" }
     ];
     const navEl = containerEl.createDiv({ cls: "status-history-tabs-nav" });
@@ -705,6 +843,9 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
         if (e.key === "Enter") addProp();
       });
     }).addButton((btn) => btn.setButtonText("Add").onClick(addProp));
+    const dailyPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
+    dailyPane.setAttribute("data-tab", "daily");
+    this.renderDailyNoteLogPane(dailyPane);
     const chartPane = contentEl.createDiv({ cls: "status-history-tab-pane" });
     chartPane.setAttribute("data-tab", "chart");
     chartPane.createEl("p", {
@@ -742,6 +883,115 @@ var StatusHistorySettingTab = class extends import_obsidian.PluginSettingTab {
       })
     );
     showTab("filters");
+  }
+  renderDailyNoteLogPane(pane) {
+    const settings = this.plugin.settings.dailyNoteLog;
+    new import_obsidian.Setting(pane).setName("Enable daily note logging").setDesc("Append a log entry to the daily note whenever a tracked property changes on a watched file.").addToggle(
+      (toggle) => toggle.setValue(settings.enabled).onChange(async (value) => {
+        this.plugin.settings.dailyNoteLog.enabled = value;
+        await this.plugin.save();
+      })
+    );
+    pane.createEl("h3", { text: "Daily Note Location" });
+    pane.createEl("p", {
+      text: "If the core Daily Notes plugin is enabled, its folder and date format are used. Otherwise the values below are used as a fallback.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(pane).setName("Folder (fallback)").setDesc("Folder where daily notes are stored. Leave empty for the vault root.").addText(
+      (text) => text.setPlaceholder("e.g. Daily").setValue(settings.folder).onChange(async (val) => {
+        this.plugin.settings.dailyNoteLog.folder = val;
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(pane).setName("Date format (fallback)").setDesc("Moment.js format used for the daily note filename (e.g. YYYY-MM-DD).").addText(
+      (text) => text.setPlaceholder("YYYY-MM-DD").setValue(settings.dateFormat).onChange(async (val) => {
+        this.plugin.settings.dailyNoteLog.dateFormat = val;
+        await this.plugin.save();
+      })
+    );
+    new import_obsidian.Setting(pane).setName("Heading (optional)").setDesc("If set, log entries are inserted under this heading (e.g. '## Status Changes'). The heading is created if missing. Leave empty to append to the end of the daily note.").addText(
+      (text) => text.setPlaceholder("e.g. ## Status Changes").setValue(settings.heading).onChange(async (val) => {
+        this.plugin.settings.dailyNoteLog.heading = val;
+        await this.plugin.save();
+      })
+    );
+    pane.createEl("h3", { text: "Log Groups" });
+    pane.createEl("p", {
+      text: "Define a log template per tag. When a tracked property changes on a note, the first group whose tag is on the note is used. If no group matches, nothing is logged.",
+      cls: "setting-item-description"
+    });
+    pane.createEl("p", {
+      text: "Template placeholders: {{link}}, {{name}}, {{path}}, {{key}}, {{from}}, {{to}}, {{date}}, {{time}}",
+      cls: "setting-item-description"
+    });
+    const groupsEl = pane.createDiv({ cls: "status-history-group-list" });
+    const renderGroups = () => {
+      groupsEl.empty();
+      const groups = this.plugin.settings.dailyNoteLog.groups;
+      groups.forEach((group, i) => {
+        const card = groupsEl.createDiv({ cls: "status-history-group-card" });
+        new import_obsidian.Setting(card).setName(`Group ${i + 1}${group.tag ? `: #${group.tag}` : ""}`).addButton(
+          (btn) => btn.setIcon("arrow-up").setTooltip("Move up").setDisabled(i === 0).onClick(async () => {
+            [groups[i - 1], groups[i]] = [groups[i], groups[i - 1]];
+            await this.plugin.save();
+            renderGroups();
+          })
+        ).addButton(
+          (btn) => btn.setIcon("arrow-down").setTooltip("Move down").setDisabled(i === groups.length - 1).onClick(async () => {
+            [groups[i], groups[i + 1]] = [groups[i + 1], groups[i]];
+            await this.plugin.save();
+            renderGroups();
+          })
+        ).addButton(
+          (btn) => btn.setIcon("trash").setTooltip("Remove group").onClick(async () => {
+            groups.splice(i, 1);
+            await this.plugin.save();
+            renderGroups();
+          })
+        );
+        new import_obsidian.Setting(card).setName("Tag").setDesc("Notes carrying this tag use this group's template (without '#').").addText(
+          (text) => text.setPlaceholder("e.g. project").setValue(group.tag).onChange(async (val) => {
+            group.tag = val.trim().replace(/^#/, "");
+            await this.plugin.save();
+          })
+        );
+        new import_obsidian.Setting(card).setName("Watched property keys").setDesc("Comma-separated frontmatter keys this group logs (e.g. status, deadline). Leave empty to log every tracked change.").addText(
+          (text) => text.setPlaceholder("status, deadline").setValue(group.watchedKeys.join(", ")).onChange(async (val) => {
+            group.watchedKeys = val.split(",").map((k) => k.trim()).filter((k) => k);
+            await this.plugin.save();
+          })
+        );
+        new import_obsidian.Setting(card).setName("{{key}} uses").setDesc("Which name to substitute for the {{key}} placeholder.").addDropdown(
+          (dropdown) => dropdown.addOption("frontmatter", "Frontmatter key (e.g. status)").addOption("history", "History key (e.g. statusSet)").setValue(group.keyForm).onChange(async (val) => {
+            group.keyForm = val;
+            await this.plugin.save();
+          })
+        );
+        const templateSetting = new import_obsidian.Setting(card).setName("Template").setDesc("Line written to the daily note. Multiple lines are supported.");
+        templateSetting.addTextArea((text) => {
+          text.setPlaceholder("- {{link}}: {{key}} changed from {{from}} to {{to}}").setValue(group.template).onChange(async (val) => {
+            group.template = val;
+            await this.plugin.save();
+          });
+          text.inputEl.rows = 3;
+          text.inputEl.style.width = "100%";
+        });
+        templateSetting.settingEl.style.display = "block";
+      });
+    };
+    renderGroups();
+    new import_obsidian.Setting(pane).addButton(
+      (btn) => btn.setButtonText("Add group").setCta().onClick(async () => {
+        this.plugin.settings.dailyNoteLog.groups.push({
+          tag: "",
+          template: "- {{link}}: {{key}} changed from {{from}} to {{to}}",
+          watchedKeys: [],
+          keyForm: "frontmatter"
+        });
+        await this.plugin.save();
+        renderGroups();
+      })
+    );
   }
   renderListSection(containerEl, heading, description, placeholder, getItems, onAdd, onRemove) {
     containerEl.createEl("h3", { text: heading });

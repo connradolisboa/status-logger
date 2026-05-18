@@ -24,3 +24,17 @@
   color: var(--text-accent);
   border-bottom-color: var(--text-accent);
 }
+
+.status-history-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.status-history-group-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: var(--background-secondary);
+}
