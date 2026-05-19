@@ -8,6 +8,7 @@ An [Obsidian](https://obsidian.md) plugin that automatically logs property chang
 - **Flexible filtering** — Include/exclude specific folders and tags to control which notes are tracked
 - **Smart deduplication** — Optionally skip logging duplicate status values or overwrite same-day entries
 - **Comments** — Add timestamped comments to notes to annotate status history
+- **Daily note logging** — Mirror property changes into your daily note using tag-based templates, so you can see at a glance what moved each day
 - **Visual status charts** — Insert interactive charts that visualize how status evolved over time across multiple notes (requires [Dataview](https://github.com/blacksmithgu/obsidian-dataview) and [Obsidian Charts](https://github.com/phibr0/obsidian-charts))
 - **Customizable keys** — Rename the history key and property names to match your vault's naming conventions
 - **Multiple tracked properties** — Go beyond status—track deadline changes, priority updates, assignees, or any other property
@@ -118,7 +119,7 @@ Control which notes the plugin monitors:
 
 #### Behavior Tab
 
-Customize logging behavior and property names:
+Customize logging behavior and property names.
 
 ##### Logging Options
 
@@ -154,6 +155,41 @@ When the `deadline` property changes, it appears in the history entry:
 - dateSet: "2025-02-28"
   deadlineSet: "2025-05-15"
   comment: "Deadline extended"
+```
+
+#### Daily Note Log Tab
+
+Mirror tracked property changes into your daily note. When a watched property changes on a file, a configurable line is appended to today's daily note — useful for skimming what moved each day without opening every project.
+
+| Setting | Description |
+|---------|-------------|
+| **Enable daily note logging** | Master switch for the feature |
+| **Folder (fallback)** | Folder where daily notes live. Used only if the core Daily Notes plugin is disabled |
+| **Date format (fallback)** | Moment.js format for the daily-note filename (e.g. `YYYY-MM-DD`). Falls back to this only if the core Daily Notes plugin is disabled |
+| **Heading (optional)** | If set, entries are inserted under this heading (e.g. `## Status Changes`). The heading is created if missing. Leave empty to append at the end of the note |
+
+If the core **Daily Notes** plugin is enabled, its folder and date format are used automatically — the fallback values only apply when it's disabled.
+
+##### Log Groups
+
+Each group routes notes tagged with a given tag to a specific log template. The first group whose tag matches the changed note wins. If no group matches, nothing is logged.
+
+| Field | Description |
+|-------|-------------|
+| **Tag** | Tag (without `#`) that the source note must carry to use this group |
+| **Watched keys** | Optional comma-separated list of keys to log. Leave empty to log every tracked change. Switch between matching by frontmatter key (e.g. `status`) or history key (e.g. `statusSet`) |
+| **Template** | The line written to the daily note. Supports placeholders: `{{link}}`, `{{name}}`, `{{path}}`, `{{key}}`, `{{from}}`, `{{to}}`, `{{date}}`, `{{time}}` |
+
+**Example template:**
+
+```
+- {{time}} {{link}} — {{key}}: {{from}} → {{to}}
+```
+
+When the `status` on a note tagged `project` flips from `Backlog` to `Active`, the daily note gets:
+
+```
+- 14:32 [[Launch new website]] — status: Backlog → Active
 ```
 
 #### Chart Defaults Tab
